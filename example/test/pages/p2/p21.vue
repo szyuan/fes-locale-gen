@@ -1,31 +1,32 @@
 <template>
     <div class="page">
         <div class="page-content mx-6">
-            <h1 class="page-title">{{ $t('_.组织架构管理') }}</h1>
+            <h1 class="page-title">组织架构管理</h1>
             <div class="main">
                 <div class="flex">
                     <div class="w-sm bg-red flex-shrink-0 mr-2">
-                        <div class="text-base font-bold mb-4">{{ $t('_.组织架构') }}</div>
+                        <div class="text-base font-bold mb-4">组织架构</div>
                         <div class="space-x-2">
                             <FButton type="primary" :disabled="selectedNode && selectedNode.level >= 5" @click="onOrgModifyClick('ADD')">
-                                <PlusOutlined />{{ $t('_.新增') }}</FButton>
-                            <FButton @click="onOrgModifyClick('EDIT')"><EditOutlined />{{ $t('_.编辑') }}</FButton>
+                                <PlusOutlined />新增
+                            </FButton>
+                            <FButton @click="onOrgModifyClick('EDIT')"><EditOutlined />编辑</FButton>
                         </div>
                     </div>
                     <div class="flex-grow">
-                        <div class="text-base font-bold mb-4">{{ $t('_.组织信息') }}</div>
+                        <div class="text-base font-bold mb-4">组织信息</div>
                         <div class="table-wrapper mt-4">
                             <FTable bordered size="small" :data="orgTableData" rowKey="name">
-                                <FTableColumn v-slot="{ row }" :label="$t('_.是否参与排名')">{{ row.compare === 1 ? '是' : '否' }}</FTableColumn>
-                                <FTableColumn prop="indexNo" :label="$t('_.排序')"></FTableColumn>
+                                <FTableColumn v-slot="{ row }" label="是否参与排名">{{ row.compare === 1 ? '是' : '否' }}</FTableColumn>
+                                <FTableColumn prop="indexNo" label="排序"></FTableColumn>
                             </FTable>
                         </div>
-                        <div class="text-base font-bold my-4">{{ $t('_.人员信息') }}</div>
+                        <div class="text-base font-bold my-4">人员信息</div>
                         <div class="table-wrapper mt-4">
                             <FTable bordered size="small" :data="tableData" rowKey="aaa">
-                                <FTableColumn v-slot="{ rowIndex }" :label="$t('_.序号')" :width="50">{{ rowIndex + 1 }}</FTableColumn>
-                                <FTableColumn prop="name" :label="$t('_.员工姓名')"></FTableColumn>
-                                <FTableColumn prop="roleNames" :label="$t('_.角色')"></FTableColumn>
+                                <FTableColumn v-slot="{ rowIndex }" label="序号" :width="50">{{ rowIndex + 1 }}</FTableColumn>
+                                <FTableColumn prop="name" label="员工姓名"></FTableColumn>
+                                <FTableColumn prop="roleNames" label="角色"></FTableColumn>
                             </FTable>
                         </div>
                         <div class="pagination-wrapper">
@@ -38,7 +39,6 @@
 </template>
 
 <script setup>
-
 import { FTable, FTableColumn, FButton, FMessage } from '@fesjs/fes-design';
 import { computed, ref } from 'vue';
 import { useI18n } from '@fesjs/fes';
@@ -76,26 +76,26 @@ const orgModifyFormConfig = {
     name: {
         rules: {
             required: true,
-            label: $t('_.组织名称'),
-            message: $t('_.组织名称不能为空'),
+            label: '组织名称',
+            message: '组织名称不能为空',
         },
         default: '',
     },
     indexNo: {
         rules: {
             required: true,
-            label: $t('_.排序序号'),
+            label: '排序序号',
             min: 1,
             max: 100,
             type: 'number',
-            message: $t('_.请输入1-100的整数'),
+            message: '请输入1-100的整数',
         },
         default: 1,
     },
     compare: {
         rules: {
             required: true,
-            label: $t('_.是否参与排名'),
+            label: '是否参与排名',
             type: 'integer',
         },
         default: 1,
@@ -107,14 +107,13 @@ const orgModifyFormConfig = {
 
 function onOrgModifyClick(flag) {
     if (flag === 'EDIT') {
-        if (!selectedNode.value) return FMessage.error($t('_.请先选择节点'));
+        if (!selectedNode.value) return FMessage.error('请先选择节点');
     }
 }
 
 
 // 生命周期 ------------------------------------------------
 updateOrgTree();
-
 </script>
 
 <config>
