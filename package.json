@@ -1,5 +1,5 @@
 {
-  "name": "fes-locale-script",
+  "name": "fes-locale-gen",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
