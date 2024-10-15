@@ -1,7 +1,7 @@
 # FES 国际化自动脚本工具
 
 ## 功能
-1. 读取指定目录下的所有.vue文件，自动替换template与script中的语言标签为变量引用形式。以中文作为key，提高代码可读性。
+1. 读取指定目录下的所有.vue、.js、.ts、.tsx文件，自动替换template与script中的语言标签为变量引用形式。以中文作为key，提高代码可读性。
 例：
 ```
 <!-- 转换前： -->
@@ -11,12 +11,14 @@
 <h1 :label="$t('_.排序')">{{ $t('_.组织架构管理') }}</h1>
 ```
 
+2. 会在命令执行的目录下生成locales-generated/zh-CN-common.js
+
 ## 用法
 
 ### 安装与执行
 
 ```
-wnpm i -g fes-locale-gen
+npm i -g fes-locale-gen
 fes-locale-gen -d <目录> -e <排除文件>
 ```
 

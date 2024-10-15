@@ -185,7 +185,7 @@ function singleFileProcessor(filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
     const fileExt = path.extname(filePath);
 
-    if (fileExt === '.js') {
+    if (fileExt === '.js' || fileExt === '.ts') {
         const chunkSize = 1000000; // 1MB chunks
         let processedContent = '';
         for (let i = 0; i < fileContent.length; i += chunkSize) {
@@ -232,8 +232,21 @@ ${processedScript}
 }
 
 function generateLocaleFile() {
-    const outputFilePath = path.join(__dirname, 'zh-CN-common.js');
+    // 获取用户执行命令时的当前工作目录
+    const currentWorkingDirectory = process.cwd();
+    
+    // 定义生成文件的目录
+    const outputDirectory = path.join(currentWorkingDirectory, 'locales-generated');
+    
+    // 检查并创建目录（如果不存在）
+    if (!fs.existsSync(outputDirectory)) {
+        fs.mkdirSync(outputDirectory, { recursive: true });
+    }
+    
+    // 构建生成文件的路径
+    const outputFilePath = path.join(outputDirectory, 'zh-CN-common.js');
     const existingTexts = {};
+
     if (fs.existsSync(outputFilePath)) {
         const fileContent = fs.readFileSync(outputFilePath, 'utf-8');
         const matches = fileContent.match(/'([^']+)':\s*'([^']+)'/g);
@@ -245,18 +258,22 @@ function generateLocaleFile() {
         }
     }
 
-    // Convert replacedTexts Set to an object
+    // 将 replacedTexts Set 转换为对象
     const replacedTextsObj = {};
     for (const text of replacedTexts) {
         if (!text.startsWith('_') && !existingTexts.hasOwnProperty(text)) {
             replacedTextsObj[text] = text;
         }
     }
-    // Merge existingTexts and replacedTextsObj
+
+    // 合并 existingTexts 和 replacedTextsObj
     const allTexts = { ...existingTexts, ...replacedTextsObj };
+
+    // 创建写入流
     const outputStream = fs.createWriteStream(outputFilePath);
     outputStream.write('/* eslint-disable prettier/prettier */\nexport default {\n');
-    // Write all texts to the file
+    
+    // 将所有文本写入文件
     for (const text in allTexts) {
         if (!text.startsWith('_')) {
             const escapedKey = escapeString(text);
@@ -265,7 +282,10 @@ function generateLocaleFile() {
         }
     }
     outputStream.end('};\n');
+
+    console.log(`Locale file generated at: ${outputFilePath}`);
 }
+
 
 function escapeString(str) {
     return str
