@@ -82,10 +82,21 @@ function processJavaScript(code, isModule = true) {
                     path.node.callee.object.name === 'console') {
                     path.skip();
                 }
+                // 跳过已经是 $t 调用的表达式
+                if (path.node.callee.name === '$t') {
+                    path.skip();
+                }
             },
             StringLiteral(path) {
+                // 检查父节点是否已经是 $t 调用
+                const isAlreadyTranslated = path.findParent(p => 
+                    p.isCallExpression() && p.node.callee.name === '$t'
+                );
+
                 if (/[\u4e00-\u9fa5]/.test(path.node.value) && 
+                    !isAlreadyTranslated &&
                     !path.node.value.startsWith('_.$t(') &&
+                    !path.node.value.match(/^\$t\('_\.[^']+'\)$/) &&
                     !path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
                     const text = path.node.value;
                     replacedTexts.add(text);
@@ -101,7 +112,8 @@ function processJavaScript(code, isModule = true) {
                 if (!path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
                     path.node.quasis.forEach((quasi) => {
                         if (/[\u4e00-\u9fa5]/.test(quasi.value.raw) && 
-                            !quasi.value.raw.includes('$t(\'_')) {
+                            !quasi.value.raw.includes('$t(\'_') &&
+                            !quasi.value.raw.match(/\$t\('_\.[^']+'\)/)) {
                             const text = quasi.value.raw;
                             replacedTexts.add(text);
                             const escapedText = escapeForTranslation(text);
@@ -139,7 +151,7 @@ function processJavaScript(code, isModule = true) {
 
         return code;
     } catch (error) {
-        console.error('Error in processJavaScript:', error);
+        console.error('处理 JavaScript 时出错:', error);
         return code;
     }
 }
@@ -237,7 +249,7 @@ function generateLocaleFile() {
        fs.mkdirSync(outputDirectory, { recursive: true });
    }
    
-    // 构建生成文件的路径
+
     const outputFilePath = path.join(outputDirectory, 'zh-CN-common.js');
     const existingTexts = {};
 
