@@ -1,0 +1,33 @@
+{
+  "name": "fes-locale-script",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "bin": {
+    "fes-locale-gen": "./src/locale.js"
+  },
+  "directories": {
+    "example": "example"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.23.0",
+    "@babel/traverse": "^7.23.2",
+    "@vitalets/google-translate-api": "^9.2.0",
+    "@vue/compiler-core": "^3.3.8",
+    "@vue/compiler-dom": "^3.3.8",
+    "@vue/compiler-sfc": "^3.3.8",
+    "eslint": "^8.53.0",
+    "glob": "^10.3.10",
+    "lodash": "^4.17.21",
+    "minimist": "^1.2.8",
+    "vue": "^2.7.15",
+    "vue-eslint-parser": "^9.3.2",
+    "vue-template-compiler": "^2.7.15"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
