@@ -64,25 +64,70 @@ function escapeForTranslation(str) {
 
 function processJavaScript(code, isModule = true) {
     try {
-        const ast = parseJS(code, {
+        let ast = parseJS(code, {
             sourceType: isModule ? 'module' : 'script',
             plugins: ['jsx'],
         });
 
         let hasUseI18nImport = false;
+        let hasDollarTDeclaration = false;
         let existingFesImport = null;
         const replacements = [];
-        let lastImportIndex = -1;
 
+        // 第一次遍历：只处理导入语句
         traverse(ast, {
             ImportDeclaration(path) {
-                lastImportIndex = Math.max(lastImportIndex, path.node.end);
                 if (path.node.source.value === '@fesjs/fes') {
                     existingFesImport = path.node;
                     hasUseI18nImport = path.node.specifiers.some(spec => 
                         spec.type === 'ImportSpecifier' && 
                         spec.imported.name === 'useI18n');
                 }
+            }
+        });
+
+        // 处理 useI18n 的导入
+        if (!hasUseI18nImport) {
+            if (existingFesImport) {
+                const importStart = existingFesImport.start;
+                const importEnd = existingFesImport.end;
+                const newImport = generate(existingFesImport).code.replace(/}(?=[^}]*$)/, ', useI18n }');
+                code = code.slice(0, importStart) + newImport + code.slice(importEnd);
+            } else {
+                code = `import { useI18n } from '@fesjs/fes';\n${code}`;
+            }
+        }
+
+        // 第二次遍历：处理其他替换和检查 $t 声明
+        ast = parseJS(code, {
+            sourceType: isModule ? 'module' : 'script',
+            plugins: ['jsx'],
+        });
+
+        let lastImportIndex = -1;
+
+        traverse(ast, {
+            ImportDeclaration(path) {
+                if(path.node.type === 'ImportDeclaration') {
+                    // console.log('ImportDeclaration');
+                    lastImportIndex = Math.max(lastImportIndex, path.node.loc.end.line);
+                }
+            },
+            VariableDeclaration(path) {
+                path.node.declarations.forEach(declaration => {
+                    if (declaration.init && 
+                        declaration.init.type === 'CallExpression' &&
+                        declaration.init.callee.name === 'useI18n') {
+                        if (declaration.id.type === 'ObjectPattern') {
+                            const tProperty = declaration.id.properties.find(prop => 
+                                prop.key.name === 't' && prop.value.name === '$t'
+                            );
+                            if (tProperty) {
+                                hasDollarTDeclaration = true;
+                            }
+                        }
+                    }
+                });
             },
             CallExpression(path) {
                 if (path.node.callee.type === 'MemberExpression' &&
@@ -141,19 +186,12 @@ function processJavaScript(code, isModule = true) {
             code = code.slice(0, start) + text + code.slice(end);
         }
 
-        // 如果需要导入 useI18n
-        if (!hasUseI18nImport && replacements.length > 0) {
-            let insertIndex = lastImportIndex + 1;
-            if (existingFesImport) {
-                // 修改现有的 @fesjs/fes 导入
-                const importStart = existingFesImport.start;
-                const importEnd = existingFesImport.end;
-                const newImport = generate(existingFesImport).code.replace('}', ', useI18n }');
-                code = code.slice(0, importStart) + newImport + code.slice(importEnd);
-            } else {
-                // 添加新的导入语句
-                code = code.slice(0, insertIndex) + `\nimport { useI18n } from '@fesjs/fes';\n` + code.slice(insertIndex);
-            }
+        // 添加 $t 声明（如果需要）
+        if (!hasDollarTDeclaration && replacements.length > 0) {
+            const lines = code.split('\n');
+            const insertIndex = lastImportIndex !== -1 ? lastImportIndex + 1 : 0;
+            lines.splice(insertIndex, 0, `const { t: $t } = useI18n();`);
+            code = lines.join('\n');
         }
 
         return code;

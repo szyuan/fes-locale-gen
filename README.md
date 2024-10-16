@@ -47,9 +47,9 @@ fes-locale-gen translate
 
 **注意以下是脚本执行后需要手动完成的部分:**
 
-1. 需要为每个文件手动添加i18n插件的引入语句。 
+~~1. 需要为每个文件手动添加i18n插件的引入语句。~~
 
-`/pages/**.vue`
+~~`/pages/**.vue`
 ```
 import { useI18n } from '@fesjs/fes';
 const { t: $t } = useI18n();
