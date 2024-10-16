@@ -49,7 +49,7 @@ fes-locale-gen translate
 
 ~~1. 需要为每个文件手动添加i18n插件的引入语句。~~
 
-~~`/pages/**.vue`
+`/pages/**.vue`
 ```
 import { useI18n } from '@fesjs/fes';
 const { t: $t } = useI18n();
