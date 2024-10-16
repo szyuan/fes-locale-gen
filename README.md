@@ -1,7 +1,7 @@
 # FES 国际化自动脚本工具
 
 ## 功能
-1. 读取指定目录下的所有.vue、.js、.ts、.tsx文件，自动替换template与script中的语言标签为变量引用形式。以中文作为key，提高代码可读性。
+1. 读取指定目录下的所有.vue、.js、.jsx文件，自动替换template与script中的语言标签为变量引用形式。以中文作为key，提高代码可读性。
 例：
 ```
 <!-- 转换前： -->
@@ -13,13 +13,33 @@
 
 2. 会在命令执行的目录下生成locales-generated/zh-CN-common.js
 
+3. 支持将生成的中文文件翻译成英文（en-US-common.js）
 ## 用法
 
-### 安装与执行
+### 安装
 
 ```
 npm i -g fes-locale-gen
+```
+
+### 基本使用
+```
 fes-locale-gen -d <目录> -e <排除文件>
+```
+
+### 配置翻译API
+```
+fes-locale-gen config set --key <your-api-key> --url <api-url>
+```
+
+### 查看当前配置
+```
+fes-locale-gen config list
+```
+
+### 翻译生成的中文文件
+```
+fes-locale-gen translate
 ```
 
 ### 注意事项
@@ -66,5 +86,3 @@ export default {
 - template中的表达式，如`<p>{{ row.compare === 1 ? '是' : '否' }}</p>`
 - 待补充...
 
-## TODO
-- 接入翻译服务，如百度翻译、腾讯翻译等
