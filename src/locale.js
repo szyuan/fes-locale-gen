@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+
+// 清理 require 缓存
+Object.keys(require.cache).forEach(function(key) { delete require.cache[key] });
+
 const fs = require('fs');
 const { parse } = require('vue-eslint-parser');
 const path = require('path');
@@ -7,9 +11,12 @@ const minimist = require('minimist');
 const { parse: parseJS } = require('@babel/parser');
 const traverse = require('@babel/traverse').default;
 const generate = require('@babel/generator').default;
+const dotenv = require('dotenv');
+const { OpenAI } = require('openai');
 
 // 解析命令行参数
 const args = minimist(process.argv.slice(2), {
+    string: ['key', 'url'],
     alias: {
         f: 'file',
         d: 'directory',
@@ -38,7 +45,7 @@ function readTemplate(filePath) {
                 jsx: true,
             },
         });
-        console.log('parse completed');
+        // console.log('parse completed');
     } catch (e) {
         console.error('ast解析出错: ', filePath, e);
     }
@@ -82,7 +89,7 @@ function processJavaScript(code, isModule = true) {
                     path.node.callee.object.name === 'console') {
                     path.skip();
                 }
-                // 跳过已经是 $t 调用的表达式
+                // 跳过已经是 $t 用的表达式
                 if (path.node.callee.name === '$t') {
                     path.skip();
                 }
@@ -237,14 +244,14 @@ ${processedScript}
     }
 }
 
-function generateLocaleFile() {
+async function generateLocaleFile() {
    // 获取用户执行命令时的当前工作目录
    const currentWorkingDirectory = process.cwd();
     
    // 定义生成文件的目录
    const outputDirectory = path.join(currentWorkingDirectory, 'locales-generated');
    
-   // 检查并创建目录（如果不存在）
+   // 检查并创建目录（如果不在）
    if (!fs.existsSync(outputDirectory)) {
        fs.mkdirSync(outputDirectory, { recursive: true });
    }
@@ -281,6 +288,9 @@ function generateLocaleFile() {
         }
     }
     outputStream.end('};\n');
+
+    // 在文件生成完成后，返回生成的文件路径
+    return outputFilePath;
 }
 
 function generateTxtFile() {
@@ -307,8 +317,8 @@ function generateTxtFile() {
     outputStream.end('\n');
 }
 
-function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
-    console.log('dirPath', dirPath, excludedDirList);
+async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
+    // console.log('dirPath', dirPath, excludedDirList);
     const files = glob.sync(path.join(dirPath, '**/*.{vue,js,jsx}').replace(/\\/g, '/'), {
         ignore: excludedDirList,
     });
@@ -340,7 +350,7 @@ function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
     if (extractTxt) {
         generateTxtFile();
     } else {
-        generateLocaleFile();
+        await generateLocaleFile();
     }
 
     console.log(`Processing completed. ${processedCount} files processed.`);
@@ -349,8 +359,139 @@ function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
     }
 }
 
-function main() {
+async function translateLocaleFile() {
+    dotenv.config();
+    const apiKey = process.env.API_KEY;
+    const apiUrl = process.env.API_URL;
+    const localesDir = path.join(process.cwd(), '/locales-generated')
+    if (!apiKey || !apiUrl) {
+        console.error('API key or URL not set. Please run "fes-locale-gen config set --key <your-key> --url <your-url>" first.');
+        return;
+    }
+
+    const openai = new OpenAI({
+        apiKey: apiKey,
+        baseURL: apiUrl,
+    });
+    
+    const zhFilePath = path.join(localesDir, 'zh-CN-common.js');
+    const enFilePath = path.join(localesDir, 'en-US-common.js');
+
+    if (!fs.existsSync(zhFilePath)) {
+        console.error(`zh-CN-common.js not found in ${localesDir}. Please generate it first.`);
+        return;
+    }
+
+    // 读取文件内容并替换 export default 为 module.exports =
+    let zhContent = fs.readFileSync(zhFilePath, 'utf-8');
+    zhContent = zhContent.replace('export default', 'module.exports =');
+    
+    // 将修改后的内容写入临时文件
+    const tempFilePath = path.join(localesDir, 'temp-zh-CN-common.js');
+    fs.writeFileSync(tempFilePath, zhContent);
+
+    // 使用 require 导入对象
+    const zhJson = require(tempFilePath);
+
+    // 删除临时文件
+    fs.unlinkSync(tempFilePath);
+
+    const chunks = chunkObject(zhJson, 200);
+
+    let translatedContent = {};
+    for (let i = 0; i < chunks.length; i++) {
+        console.log(`Translating chunk ${i + 1} of ${chunks.length}...`);
+        const translatedChunk = await translateChunk(chunks[i], openai);
+        if (translatedChunk) {
+            translatedContent = { ...translatedContent, ...JSON.parse(translatedChunk) };
+        } else {
+            console.error(`Failed to translate chunk ${i + 1}.`);
+        }
+    }
+
+    const outputContent = `/* eslint-disable prettier/prettier */\nexport default ${JSON.stringify(translatedContent, null, 2)};\n`;
+    fs.writeFileSync(enFilePath, outputContent);
+    console.log('Translation completed. en-US-common.js has been generated.');
+}
+
+function checkConfig() {
+    dotenv.config();
+    const apiKey = process.env.API_KEY;
+    const apiUrl = process.env.API_URL;
+
+    if (!apiKey || !apiUrl) {
+        console.error('API key or URL not set. Please run "fes-locale-gen config set --key <your-key> --url <your-url>" first.');
+        process.exit(1);
+    }
+}
+
+async function main() {
     applyInDir(args.f, args.d, args.e, false);
 }
 
-main();
+// 配置命令
+function handleConfig() {
+    if (args._[1] === 'list') {
+        // 列出当前配置
+        dotenv.config();
+        console.log('Current configuration:');
+        console.log(`API_KEY: ${process.env.API_KEY || 'Not set'}`);
+        console.log(`API_URL: ${process.env.API_URL || 'Not set'}`);
+    } else if (args._[1] === 'set') {
+        // 设置新配置
+        const config = {};
+        if (args.key) config.API_KEY = args.key;
+        if (args.url) config.API_URL = args.url;
+        
+        const envContent = Object.entries(config)
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
+
+        fs.writeFileSync('.env', envContent);
+        console.log('Configuration saved successfully.');
+    } else {
+        console.log('Please use either "list" or "set" subcommand with "config" command.');
+    }
+}
+
+// 翻译命令
+async function handleTranslate() {
+    checkConfig();
+    await translateLocaleFile();
+}
+
+// 主逻辑
+if (args._[0] === 'config') {
+    handleConfig();
+} else if (args._[0] === 'translate') {
+    handleTranslate();
+} else {
+    main();
+}
+
+// 分组函数
+function chunkObject(obj, size) {
+    const chunks = [];
+    const entries = Object.entries(obj);
+    for (let i = 0; i < entries.length; i += size) {
+        chunks.push(Object.fromEntries(entries.slice(i, i + size)));
+    }
+    return chunks;
+}
+
+// 翻译函数
+async function translateChunk(chunk, openai) {
+    const prompt = `Translate the following JSON object values from Chinese to English. Keep the keys unchanged:\n${JSON.stringify(chunk)}`;
+    try {
+        const response = await openai.chat.completions.create({
+            model: "gpt-4o",
+            messages: [{ role: "user", content: prompt }],
+            response_format: {type: "json_object"}
+        });
+        const translatedText = response.choices[0].message.content;
+        return translatedText;
+    } catch (error) {
+        console.error('Translation error:', error.message);
+        return null;
+    }
+}
