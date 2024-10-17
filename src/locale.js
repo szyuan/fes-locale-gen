@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // 清理 require 缓存
-Object.keys(require.cache).forEach(function(key) { delete require.cache[key] });
+Object.keys(require.cache).forEach(function (key) { delete require.cache[key] });
 
 const fs = require('fs');
 const { parse } = require('vue-eslint-parser');
@@ -59,10 +59,10 @@ function readTemplate(filePath) {
 const replacedTexts = new Set();
 
 function escapeForTranslation(str) {
-    return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-function processJavaScript(code, isModule = true) {
+function processJavaScript(code, isModule = true, templateHasReplace = false) {
     try {
         let ast = parseJS(code, {
             sourceType: isModule ? 'module' : 'script',
@@ -84,14 +84,14 @@ function processJavaScript(code, isModule = true) {
                 }
             },
             StringLiteral(path) {
-                if (/[\u4e00-\u9fa5]/.test(path.node.value) && 
+                if (/[\u4e00-\u9fa5]/.test(path.node.value) &&
                     !path.findParent(p => p.isCallExpression() && p.node.callee.name === '$t') &&
                     !path.node.value.startsWith('_.$t(') &&
                     !path.node.value.match(/^\$t\('_\.[^']+'\)$/) &&
                     !path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
                     const text = path.node.value;
-                    replacedTexts.add(text);
                     const escapedText = escapeForTranslation(text);
+                    replacedTexts.add(escapedText);
                     replacements.push({
                         start: path.node.start,
                         end: path.node.end,
@@ -111,7 +111,7 @@ function processJavaScript(code, isModule = true) {
         }
 
         // 如果有替换，进行第二次和第三次遍历
-        if (replacements.length > 0) {
+        if (replacements.length > 0 || templateHasReplace) {
             ast = parseJS(code, {
                 sourceType: isModule ? 'module' : 'script',
                 plugins: ['jsx'],
@@ -125,8 +125,8 @@ function processJavaScript(code, isModule = true) {
                 ImportDeclaration(path) {
                     if (path.node.source.value === '@fesjs/fes') {
                         existingFesImport = path.node;
-                        hasUseI18nImport = path.node.specifiers.some(spec => 
-                            spec.type === 'ImportSpecifier' && 
+                        hasUseI18nImport = path.node.specifiers.some(spec =>
+                            spec.type === 'ImportSpecifier' &&
                             spec.imported.name === 'useI18n');
                     }
                 }
@@ -140,7 +140,7 @@ function processJavaScript(code, isModule = true) {
                     const newImport = generate(existingFesImport).code.replace(/}(?=[^}]*$)/, ', useI18n }');
                     code = code.slice(0, importStart) + newImport + code.slice(importEnd);
                 } else {
-                    code =`import { useI18n } from '@fesjs/fes';\n` + code;
+                    code = `import { useI18n } from '@fesjs/fes';\n` + code;
                 }
             }
 
@@ -158,11 +158,11 @@ function processJavaScript(code, isModule = true) {
                 },
                 VariableDeclaration(path) {
                     path.node.declarations.forEach(declaration => {
-                        if (declaration.init && 
+                        if (declaration.init &&
                             declaration.init.type === 'CallExpression' &&
                             declaration.init.callee.name === 'useI18n') {
                             if (declaration.id.type === 'ObjectPattern') {
-                                const tProperty = declaration.id.properties.find(prop => 
+                                const tProperty = declaration.id.properties.find(prop =>
                                     prop.key.name === 't' && prop.value.name === '$t'
                                 );
                                 if (tProperty) {
@@ -211,8 +211,9 @@ function traverseTemplate(node, replacements) {
 function handleTextNode(node, replacements) {
     const trimmedText = node.value.trim();
     if (trimmedText && !trimmedText.startsWith('{{') && !trimmedText.includes('$t(\'_')) {
-        replacedTexts.add(trimmedText);
-        const wrappedText = `{{ $t('_.${trimmedText}') }}`;
+        const escapedText = escapeForTranslation(trimmedText);
+        replacedTexts.add(escapedText);
+        const wrappedText = `{{ $t('_.${escapedText}') }}`;
         replacements.push({ start: node.range[0], end: node.range[1], text: wrappedText });
     }
 }
@@ -240,7 +241,7 @@ function singleFileProcessor(filePath) {
     } else if (fileExt === '.vue') {
         const { ast } = readTemplate(filePath);
         let processedContent = fileContent;
-
+        let templateHasReplace = false;
         // 处理 template
         if (ast.templateBody) {
             const replacements = [];
@@ -249,13 +250,16 @@ function singleFileProcessor(filePath) {
             for (const { start, end, text } of replacements) {
                 processedContent = processedContent.slice(0, start) + text + processedContent.slice(end);
             }
+            if (replacements.length > 0) {
+                templateHasReplace = true;
+            }
         }
 
         // 处理 script 和 script setup
         const scriptMatch = processedContent.match(/<script(\s+setup)?[^>]*>([\s\S]*?)<\/script>/i);
         if (scriptMatch) {
             const scriptContent = scriptMatch[2];
-            const processedScript = processJavaScript(scriptContent, true);
+            const processedScript = processJavaScript(scriptContent, true, templateHasReplace);
             if (processedScript !== scriptContent) {
                 processedContent = processedContent.replace(scriptMatch[0], `<script${scriptMatch[1] || ''}>
 ${processedScript}
@@ -272,30 +276,35 @@ ${processedScript}
 }
 
 async function generateLocaleFile() {
-   // 获取用户执行命令时的当前工作目录
-   const currentWorkingDirectory = process.cwd();
-    
-   // 定义生成文件的目录
-   const outputDirectory = path.join(currentWorkingDirectory, 'locales-generated');
-   
-   // 检查并创建目录（如果不在）
-   if (!fs.existsSync(outputDirectory)) {
-       fs.mkdirSync(outputDirectory, { recursive: true });
-   }
-   
+    // 获取用户执行命令时的当前工作目录
+    const currentWorkingDirectory = process.cwd();
+
+    // 定义生成文件的目录
+    const outputDirectory = path.join(currentWorkingDirectory, 'locales-generated');
+
+    // 检查并创建目录（如果不在）
+    if (!fs.existsSync(outputDirectory)) {
+        fs.mkdirSync(outputDirectory, { recursive: true });
+    }
+
 
     const outputFilePath = path.join(outputDirectory, 'zh-CN-common.js');
-    const existingTexts = {};
-
+    let existingTexts = {};
     if (fs.existsSync(outputFilePath)) {
-        const fileContent = fs.readFileSync(outputFilePath, 'utf-8');
-        const matches = fileContent.match(/'([^']+)':\s*'([^']+)'/g);
-        if (matches) {
-            for (const match of matches) {
-                const [key, value] = match.split(':').map(part => part.trim().replace(/^'|'$/g, ''));
-                existingTexts[key] = value;
-            }
-        }
+        // 读取文件内容并替换 export default 为 module.exports =
+        let fileContent = fs.readFileSync(outputFilePath, 'utf-8');
+        fileContent = fileContent.replace('export default', 'module.exports =');
+
+        // 将修改后的内容写入临时文件
+        const tempFilePath = path.join(outputDirectory, 'temp-zh-CN-common.js');
+        fs.writeFileSync(tempFilePath, fileContent);
+
+        // 使用 require 导入对象
+        const zhJson = require(tempFilePath);
+
+        // 删除临时文件
+        fs.unlinkSync(tempFilePath);
+        existingTexts = zhJson;
     }
 
     const replacedTextsObj = {};
@@ -304,14 +313,16 @@ async function generateLocaleFile() {
             replacedTextsObj[text] = text;
         }
     }
-    const allTexts = { ...existingTexts, ...replacedTextsObj };
     const outputStream = fs.createWriteStream(outputFilePath);
     outputStream.write('/* eslint-disable prettier/prettier */\nexport default {\n');
-    for (const text in allTexts) {
-        if (!text.startsWith('_')) {
-            const escapedKey = escapeForTranslation(text);
-            const escapedValue = escapeForTranslation(allTexts[text]);
-            outputStream.write(`  '${escapedKey}': '${escapedValue}',\n`);
+    for (const text in replacedTextsObj) {
+        if (!text.startsWith('_') ) {
+            outputStream.write(`  '${text}': '${replacedTextsObj[text]}',\n`);
+        }
+    }
+    for (const text in existingTexts) {
+        if (!text.startsWith('_') && !replacedTextsObj.hasOwnProperty(escapeForTranslation(text))) {
+            outputStream.write(`  '${escapeForTranslation(text)}': '${escapeForTranslation(existingTexts[text])}',\n`);
         }
     }
     outputStream.end('};\n');
@@ -321,7 +332,7 @@ async function generateLocaleFile() {
 }
 
 function generateTxtFile() {
-        const outputFilePath = path.join(__dirname, 'zh-CN-common.txt');
+    const outputFilePath = path.join(__dirname, 'zh-CN-common.txt');
     let existingTexts = [];
     const txtSet = new Set();
     if (fs.existsSync(outputFilePath)) {
@@ -400,7 +411,7 @@ async function translateLocaleFile() {
         apiKey: apiKey,
         baseURL: apiUrl,
     });
-    
+
     const zhFilePath = path.join(localesDir, 'zh-CN-common.js');
     const enFilePath = path.join(localesDir, 'en-US-common.js');
 
@@ -412,7 +423,7 @@ async function translateLocaleFile() {
     // 读取文件内容并替换 export default 为 module.exports =
     let zhContent = fs.readFileSync(zhFilePath, 'utf-8');
     zhContent = zhContent.replace('export default', 'module.exports =');
-    
+
     // 将修改后的内容写入临时文件
     const tempFilePath = path.join(localesDir, 'temp-zh-CN-common.js');
     fs.writeFileSync(tempFilePath, zhContent);
@@ -469,7 +480,7 @@ function handleConfig() {
         const config = {};
         if (args.key) config.API_KEY = args.key;
         if (args.url) config.API_URL = args.url;
-        
+
         const envContent = Object.entries(config)
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
@@ -513,7 +524,7 @@ async function translateChunk(chunk, openai) {
         const response = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [{ role: "user", content: prompt }],
-            response_format: {type: "json_object"}
+            response_format: { type: "json_object" }
         });
         const translatedText = response.choices[0].message.content;
         return translatedText;
