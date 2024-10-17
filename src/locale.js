@@ -221,8 +221,9 @@ function handleTextNode(node, replacements) {
 function handleAttributeNode(node, replacements) {
     const trimmedText = node.value.value.trim();
     if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
-        replacedTexts.add(trimmedText);
-        const wrappedText = `:${node.key.name}="$t('_.${trimmedText}')"`;
+        const escapedText = escapeForTranslation(trimmedText);
+        replacedTexts.add(escapedText);
+        const wrappedText = `:${node.key.name}="$t('_.${escapedText}')"`;
         replacements.push({ start: node.range[0], end: node.range[1], text: wrappedText });
     }
 }
