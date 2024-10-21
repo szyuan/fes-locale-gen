@@ -62,7 +62,7 @@ function escapeForTranslation(str) {
     return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 }
 
-function processJavaScript(code, isModule = true, templateHasReplace = false) {
+function processJavaScript(code, isModule = true, templateHasReplace = false, isJSFile = false) {
     try {
         let ast = parseJS(code, {
             sourceType: isModule ? 'module' : 'script',
@@ -79,15 +79,19 @@ function processJavaScript(code, isModule = true, templateHasReplace = false) {
                     path.node.callee.object.name === 'console') {
                     path.skip();
                 }
-                if (path.node.callee.name === '$t') {
+                if (path.node.callee.name === '$t' || 
+                    (path.node.callee.type === 'MemberExpression' && 
+                     path.node.callee.object.name === 'locale' && 
+                     path.node.callee.property.name === 't')) {
                     path.skip();
                 }
             },
             StringLiteral(path) {
                 if (/[\u4e00-\u9fa5]/.test(path.node.value) &&
-                    !path.findParent(p => p.isCallExpression() && p.node.callee.name === '$t') &&
+                    !path.findParent(p => p.isCallExpression() && (p.node.callee.name === '$t' || (p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'locale' && p.node.callee.property.name === 't'))) &&
                     !path.node.value.startsWith('_.$t(') &&
                     !path.node.value.match(/^\$t\('_\.[^']+'\)$/) &&
+                    !path.node.value.match(/^locale\.t\('_\.[^']+'\)$/) &&
                     !path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
                     const text = path.node.value;
                     const escapedText = escapeForTranslation(text);
@@ -95,12 +99,29 @@ function processJavaScript(code, isModule = true, templateHasReplace = false) {
                     replacements.push({
                         start: path.node.start,
                         end: path.node.end,
-                        text: `$t('_.${escapedText}')`
+                        text: isJSFile ? `locale.t('_.${escapedText}')` : `$t('_.${escapedText}')`
                     });
                 }
             },
             TemplateLiteral(path) {
-                // ... 保持不变
+                if (!path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
+                    path.node.quasis.forEach((quasi) => {
+                        if (/[\u4e00-\u9fa5]/.test(quasi.value.raw) && 
+                            !quasi.value.raw.includes('$t(\'_') &&
+                            !quasi.value.raw.includes('locale.t(\'_') &&
+                            !quasi.value.raw.match(/\$t\('_\.[^']+'\)/) &&
+                            !quasi.value.raw.match(/locale\.t\('_\.[^']+'\)/)) {
+                            const text = quasi.value.raw;
+                            replacedTexts.add(text);
+                            const escapedText = escapeForTranslation(text);
+                            replacements.push({
+                                start: quasi.start,
+                                end: quasi.end,
+                                text: isJSFile ? `\${locale.t('_.${escapedText}')}` : `\${$t('_.${escapedText}')}`
+                            });
+                        }
+                    });
+                }
             }
         });
 
@@ -117,69 +138,74 @@ function processJavaScript(code, isModule = true, templateHasReplace = false) {
                 plugins: ['jsx'],
             });
 
-            let hasUseI18nImport = false;
+            let hasLocaleImport = false;
             let existingFesImport = null;
 
-            // 第二次遍历：检查是否引入 useI18n
+            // 第二次遍历：检查是否引入 locale 或 useI18n
             traverse(ast, {
                 ImportDeclaration(path) {
                     if (path.node.source.value === '@fesjs/fes') {
                         existingFesImport = path.node;
-                        hasUseI18nImport = path.node.specifiers.some(spec =>
+                        hasLocaleImport = path.node.specifiers.some(spec =>
                             spec.type === 'ImportSpecifier' &&
-                            spec.imported.name === 'useI18n');
+                            (spec.imported.name === 'locale' || spec.imported.name === 'useI18n'));
                     }
                 }
             });
 
-            // 添加 useI18n 导入（如果需要）
-            if (!hasUseI18nImport) {
+            // 添加 locale 或 useI18n 导入（如果需要）
+            if (!hasLocaleImport) {
                 if (existingFesImport) {
                     const importStart = existingFesImport.start;
                     const importEnd = existingFesImport.end;
-                    const newImport = generate(existingFesImport).code.replace(/}(?=[^}]*$)/, ', useI18n }');
+                    const newImport = generate(existingFesImport).code.replace(/}(?=[^}]*$)/, isJSFile ? ', locale }' : ', useI18n }');
                     code = code.slice(0, importStart) + newImport + code.slice(importEnd);
                 } else {
-                    code = `import { useI18n } from '@fesjs/fes';\n` + code;
+                    code = isJSFile
+                        ? `import { locale } from '@fesjs/fes';\n` + code
+                        : `import { useI18n } from '@fesjs/fes';\n` + code;
                 }
             }
 
-            ast = parseJS(code, {
-                sourceType: isModule ? 'module' : 'script',
-                plugins: ['jsx'],
-            });
+            // 只有在非 JS 文件的情况下才添加 $t 声明
+            if (!isJSFile) {
+                ast = parseJS(code, {
+                    sourceType: isModule ? 'module' : 'script',
+                    plugins: ['jsx'],
+                });
 
-            let hasDollarTDeclaration = false;
+                let hasDollarTDeclaration = false;
 
-            // 第三次遍历：检查是否有使用插件
-            traverse(ast, {
-                ImportDeclaration(path) {
-                    lastImportIndex = Math.max(lastImportIndex, path.node.loc.end.line);
-                },
-                VariableDeclaration(path) {
-                    path.node.declarations.forEach(declaration => {
-                        if (declaration.init &&
-                            declaration.init.type === 'CallExpression' &&
-                            declaration.init.callee.name === 'useI18n') {
-                            if (declaration.id.type === 'ObjectPattern') {
-                                const tProperty = declaration.id.properties.find(prop =>
-                                    prop.key.name === 't' && prop.value.name === '$t'
-                                );
-                                if (tProperty) {
-                                    hasDollarTDeclaration = true;
+                // 第三次遍历：检查是否有使用插件
+                traverse(ast, {
+                    ImportDeclaration(path) {
+                        lastImportIndex = Math.max(lastImportIndex, path.node.loc.end.line);
+                    },
+                    VariableDeclaration(path) {
+                        path.node.declarations.forEach(declaration => {
+                            if (declaration.init &&
+                                declaration.init.type === 'CallExpression' &&
+                                declaration.init.callee.name === 'useI18n') {
+                                if (declaration.id.type === 'ObjectPattern') {
+                                    const tProperty = declaration.id.properties.find(prop =>
+                                        prop.key.name === 't' && prop.value.name === '$t'
+                                    );
+                                    if (tProperty) {
+                                        hasDollarTDeclaration = true;
+                                    }
                                 }
                             }
-                        }
-                    });
-                }
-            });
+                        });
+                    }
+                });
 
-            // 添加 $t 声明（如果需要）
-            if (!hasDollarTDeclaration) {
-                const lines = code.split('\n');
-                const insertIndex = lastImportIndex !== -1 ? lastImportIndex + 1 : 0;
-                lines.splice(insertIndex, 0, `\nconst { t: $t } = useI18n();\n`);
-                code = lines.join('\n');
+                // 添加 $t 声明（如果需要）
+                if (!hasDollarTDeclaration) {
+                    const lines = code.split('\n');
+                    const insertIndex = lastImportIndex !== -1 ? lastImportIndex + 1 : 0;
+                    lines.splice(insertIndex, 0, `\nconst { t: $t } = useI18n();\n`);
+                    code = lines.join('\n');
+                }
             }
         }
 
@@ -233,7 +259,7 @@ function singleFileProcessor(filePath) {
     const fileExt = path.extname(filePath);
 
     if (fileExt === '.js' || fileExt === '.jsx') {
-        const processedContent = processJavaScript(fileContent, true);
+        const processedContent = processJavaScript(fileContent, true, false, true);
         return {
             inputFileContent: processedContent,
             modifyFile: () => fs.writeFileSync(filePath, processedContent),
@@ -260,7 +286,7 @@ function singleFileProcessor(filePath) {
         const scriptMatch = processedContent.match(/<script(\s+setup)?[^>]*>([\s\S]*?)<\/script>/i);
         if (scriptMatch) {
             const scriptContent = scriptMatch[2];
-            const processedScript = processJavaScript(scriptContent, true, templateHasReplace);
+            const processedScript = processJavaScript(scriptContent, true, templateHasReplace, false);
             if (processedScript !== scriptContent) {
                 processedContent = processedContent.replace(scriptMatch[0], `<script${scriptMatch[1] || ''}>
 ${processedScript}
@@ -534,3 +560,4 @@ async function translateChunk(chunk, openai) {
         return null;
     }
 }
+
