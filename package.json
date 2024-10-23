@@ -11,12 +11,13 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "node ./src/locale -d example"
+    "dev": "node ./src/locale -d example/source/pages"
   },
   "dependencies": {
     "@babel/generator": "^7.25.7",
     "@babel/parser": "^7.25.8",
     "@babel/traverse": "^7.25.7",
+    "@babel/types": "^7.25.9",
     "dotenv": "^16.4.5",
     "glob": "^11.0.0",
     "minimist": "^1.2.8",
