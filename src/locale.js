@@ -2,7 +2,7 @@
 
 // 清理 require 缓存
 Object.keys(require.cache).forEach(function (key) { delete require.cache[key] });
-
+// const { parse: parseVue } = require("@vue/compiler-sfc")
 const fs = require('fs');
 const { parse } = require('vue-eslint-parser');
 const path = require('path');
@@ -281,7 +281,11 @@ function singleFileProcessor(filePath) {
                 templateHasReplace = true;
             }
         }
-
+        // TODO: 处理template中变量
+        // const vueParseResult = parseVue(processedContent, {
+        //     sourceType: 'module',
+        // });
+        // console.log('VUE:', vueParseResult.descriptor.template.ast.children[0].props);
         // 处理 script 和 script setup
         const scriptMatch = processedContent.match(/<script(\s+setup)?[^>]*>([\s\S]*?)<\/script>/i);
         if (scriptMatch) {
@@ -473,7 +477,61 @@ async function translateLocaleFile() {
             console.error(`Failed to translate chunk ${i + 1}.`);
         }
     }
+    let missingKeys, extraKeys;
+    let attempts = 0;
+    const maxAttempts = 5;
+    do {
+        attempts++;
+        console.log(`Attempt ${attempts} to resolve key mismatches...`);
+        const zhKeys = Object.keys(zhJson);
+        const enKeys = Object.keys(translatedContent);
+        // 比对原始中文 JSON 和翻译后的英文 JSON
+        missingKeys = zhKeys.filter(key => !enKeys.includes(key));
+        extraKeys = enKeys.filter(key => !zhKeys.includes(key));
 
+        if (missingKeys.length > 0) {
+            console.log('Translating missing keys:', missingKeys);
+            const missingChunk = {};
+            missingKeys.forEach(key => {
+                missingChunk[key] = zhJson[key];
+            });
+
+            const translatedMissingChunk = await translateChunk(missingChunk, openai);
+            if (translatedMissingChunk) {
+                const parsedMissingChunk = JSON.parse(translatedMissingChunk);
+                translatedContent = { ...translatedContent, ...parsedMissingChunk };
+            } else {
+                console.error('Failed to translate missing keys');
+                break;
+            }
+        }
+
+        if (extraKeys.length > 0) {
+            console.log('Removing extra keys:', extraKeys);
+            extraKeys.forEach(key => {
+                delete translatedContent[key];
+            });
+        }
+
+        if (attempts >= maxAttempts) {
+            console.error(`Reached maximum attempts (${maxAttempts}) to resolve key mismatches.`);
+            break;
+        }
+
+    } while (missingKeys.length > 0 || extraKeys.length > 0);
+
+    if (missingKeys.length > 0 || extraKeys.length > 0) {
+        console.error('Translation mismatch detected after multiple attempts:');
+        if (missingKeys.length > 0) {
+            console.error('Missing keys in translated content:', missingKeys);
+        }
+        if (extraKeys.length > 0) {
+            console.error('Extra keys in translated content:', extraKeys);
+        }
+        console.error('Please review and correct the translation manually.');
+    } else {
+        console.log('Translation completed successfully. All keys match.');
+    }
     const outputContent = `/* eslint-disable prettier/prettier */\nexport default ${JSON.stringify(translatedContent, null, 2)};\n`;
     fs.writeFileSync(enFilePath, outputContent);
     console.log('Translation completed. en-US-common.js has been generated.');
@@ -543,17 +601,40 @@ function chunkObject(obj, size) {
     }
     return chunks;
 }
-
+// 移除json关键字
+function removeJsonKeyword(inputString) {
+    // Check if the input string starts with "```json" and ends with "```"
+    if (inputString.startsWith("```json") && inputString.endsWith("```")) {
+        // Remove the "```json" from the start and "```" from the end
+        return inputString.slice(7, -3).trim();
+    }
+    return inputString;
+}
 // 翻译函数
 async function translateChunk(chunk, openai) {
-    const prompt = `Translate the following JSON object values from Chinese to English. Keep the keys unchanged:\n${JSON.stringify(chunk)}`;
+    // const prompt = `Translate the following JSON object values from Chinese to English. Keep the keys unchanged:\n${JSON.stringify(chunk)}`;
+    const prompt = `{
+        Request: "Translate the following JSON object values from Chinese to English. Keep the keys unchanged",
+        Restriction: "Only return the JSON object without any additional replies",
+        Format: {
+            "key": "value",
+            ...
+        },
+        Original: ${JSON.stringify(chunk)},
+        Response: {
+            // your response here
+            "key": "value"
+            ...
+            
+        }
+    }`
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "qwen-72b",
             messages: [{ role: "user", content: prompt }],
-            response_format: { type: "json_object" }
+            // response_format: { type: "json_object" }
         });
-        const translatedText = response.choices[0].message.content;
+        const translatedText = removeJsonKeyword(response.choices[0].message.content);
         return translatedText;
     } catch (error) {
         console.error('Translation error:', error.message);
