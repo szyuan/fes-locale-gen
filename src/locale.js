@@ -2,7 +2,7 @@
 
 // 清理 require 缓存
 Object.keys(require.cache).forEach(function (key) { delete require.cache[key] });
-// const { parse: parseVue } = require("@vue/compiler-sfc")
+const { parse: parseVue } = require("@vue/compiler-sfc")
 const fs = require('fs');
 const { parse } = require('vue-eslint-parser');
 const path = require('path');
@@ -273,6 +273,15 @@ function singleFileProcessor(filePath) {
         if (ast.templateBody) {
             const replacements = [];
             traverseTemplate(ast.templateBody, replacements);
+            // 处理template中变量
+            const vueParseResult = parseVue(processedContent, {
+                sourceType: 'module',
+            });
+
+            if (vueParseResult.descriptor.template && vueParseResult.descriptor.template.ast) {
+                const templateAst = vueParseResult.descriptor.template.ast;
+                processTemplateAst(templateAst, replacements);
+            }
             replacements.sort((a, b) => b.start - a.start);
             for (const { start, end, text } of replacements) {
                 processedContent = processedContent.slice(0, start) + text + processedContent.slice(end);
@@ -281,11 +290,6 @@ function singleFileProcessor(filePath) {
                 templateHasReplace = true;
             }
         }
-        // TODO: 处理template中变量
-        // const vueParseResult = parseVue(processedContent, {
-        //     sourceType: 'module',
-        // });
-        // console.log('VUE:', vueParseResult.descriptor.template.ast.children[0].props);
         // 处理 script 和 script setup
         const scriptMatch = processedContent.match(/<script(\s+setup)?[^>]*>([\s\S]*?)<\/script>/i);
         if (scriptMatch) {
@@ -305,6 +309,49 @@ ${processedScript}
         };
     }
 }
+
+function processTemplateAst(ast, replacements) {
+    if (ast.props) {
+        ast.props.forEach(prop => {
+            if (prop.type === 7) { // 指令
+                processDirective(prop, replacements);
+            }
+        });
+    }
+
+    if (ast.children) {
+        ast.children.forEach(child => {
+            content = processTemplateAst(child, replacements);
+        });
+    }
+}
+
+function processDirective(prop, replacements) {
+    if (prop.exp && prop.exp.content && !prop.exp.content.includes('$t(')) {
+        const chineseRegex = /['"]([^'"]*[\u4e00-\u9fa5]+[^'"]*)['"]/g;
+        let match;
+        let processedContent = prop.exp.content;
+        
+        while ((match = chineseRegex.exec(prop.exp.content)) !== null) {
+            const originalText = match[1];
+            const escapedText = escapeForTranslation(originalText);
+            if (!replacedTexts.has(escapedText)) {
+                replacedTexts.add(escapedText);
+            }
+            processedContent = processedContent.replace(
+                `'${originalText}'`,
+                `$t('_.${escapedText}')`
+            );
+        }
+
+        if (processedContent !== prop.exp.content) {
+            // 修改content(原文件)中对应内容
+            replacements.push({start: prop.exp.loc.start.offset, end: prop.exp.loc.end.offset, text: processedContent})
+            
+        }
+    }
+}
+
 
 async function generateLocaleFile() {
     // 获取用户执行命令时的当前工作目录
