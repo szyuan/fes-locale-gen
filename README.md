@@ -84,5 +84,16 @@ export default {
 
 ## 暂未覆盖的场景
 - template中的表达式，如`<p>{{ row.compare === 1 ? '是' : '否' }}</p>`
-- 待补充...
-
+- 指令中的插值，例如
+```
+:label="`${variable}`""
+:rules="[
+    {
+        validator: (rule, value) => {
+            return true
+        },
+        trigger: ['blur', 'change'],
+        message: `${test}工作流名称需以字母开头，允许字母、数字、下划线，不超过 128 字符`
+    }
+]"
+```
