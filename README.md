@@ -86,7 +86,7 @@ export default {
 - template中的表达式，如`<p>{{ row.compare === 1 ? '是' : '否' }}</p>`
 - 指令中的插值，例如
 ```
-:label="`${variable}`""
+:label="`${variable}`"
 :rules="[
     {
         validator: (rule, value) => {
