@@ -1,6 +1,6 @@
 {
   "name": "fes-locale-gen",
-  "version": "1.0.9-beta",
+  "version": "1.0.9-beta.1",
   "description": "",
   "main": "index.js",
   "bin": {
