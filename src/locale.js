@@ -13,6 +13,7 @@ const traverse = require('@babel/traverse').default;
 const generate = require('@babel/generator').default;
 const dotenv = require('dotenv');
 const { OpenAI } = require('openai');
+const t = require('@babel/types');
 
 // 解析命令行参数
 const args = minimist(process.argv.slice(2), {
@@ -66,7 +67,7 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
     try {
         let ast = parseJS(code, {
             sourceType: isModule ? 'module' : 'script',
-            plugins: ['jsx'],
+            plugins: ['jsx', 'typescript'],
         });
 
         const replacements = [];
@@ -87,7 +88,7 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                 }
             },
             StringLiteral(path) {
-                if (/[\u4e00-\u9fa5]/.test(path.node.value) &&
+                if (path.parent.type !== 'JSXAttribute' && /[\u4e00-\u9fa5]/.test(path.node.value) &&
                     !path.findParent(p => p.isCallExpression() && (p.node.callee.name === '$t' || (p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'locale' && p.node.callee.property.name === 't'))) &&
                     !path.node.value.startsWith('_.$t(') &&
                     !path.node.value.match(/^\$t\('_\.[^']+'\)$/) &&
@@ -99,7 +100,33 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                     replacements.push({
                         start: path.node.start,
                         end: path.node.end,
-                        text: isJSFile ? `locale.t('_.${escapedText}')` : `$t('_.${escapedText}')`
+                        text: `$t('_.${escapedText}')`
+                    });
+                }
+            },
+            // 处理标签属性中的中文字符
+            JSXAttribute(path) {
+                if (t.isJSXIdentifier(path.node.name) && t.isStringLiteral(path.node.value) && /[\u4e00-\u9fa5]/.test(path.node.value.value)) {
+                    const trimmedText = path.node.value.value.trim();
+                    if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
+                        const escapedText = escapeForTranslation(trimmedText);
+                        replacedTexts.add(escapedText);
+                        const wrappedText = `${path.node.name.name}={$t('_.${escapedText}')}`;
+                        replacements.push({ start: path.node.start, end: path.node.end, text: wrappedText });
+                    }
+                }
+            },
+            // 处理标签内的中文字符
+            JSXText(path) {
+                if (/[\u4e00-\u9fa5]/.test(path.node.value) && !path.node.value.startsWith('$t(\'_') ) {
+                    const text = path.node.value.trim();
+                    const escapedText = escapeForTranslation(text);
+                    replacedTexts.add(escapedText);
+                    const wrappedText = '{`${' + `$t('_.${escapedText}')` + '}`}';
+                    replacements.push({
+                        start: path.node.start,
+                        end: path.node.end,
+                        text: wrappedText
                     });
                 }
             },
@@ -117,7 +144,7 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                             replacements.push({
                                 start: quasi.start,
                                 end: quasi.end,
-                                text: isJSFile ? `\${locale.t('_.${escapedText}')}` : `\${$t('_.${escapedText}')}`
+                                text: `\${$t('_.${escapedText}')}`
                             });
                         }
                     });
@@ -135,7 +162,7 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
         if (replacements.length > 0 || templateHasReplace) {
             ast = parseJS(code, {
                 sourceType: isModule ? 'module' : 'script',
-                plugins: ['jsx'],
+                plugins: ['jsx', 'typescript'],
             });
 
             let hasLocaleImport = false;
@@ -168,44 +195,58 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
             }
 
             // 只有在非 JS 文件的情况下才添加 $t 声明
-            if (!isJSFile) {
-                ast = parseJS(code, {
-                    sourceType: isModule ? 'module' : 'script',
-                    plugins: ['jsx'],
-                });
+            ast = parseJS(code, {
+                sourceType: isModule ? 'module' : 'script',
+                plugins: ['jsx', 'typescript'],
+            });
 
-                let hasDollarTDeclaration = false;
+            let hasDollarTDeclaration = false;
 
-                // 第三次遍历：检查是否有使用插件
-                traverse(ast, {
-                    ImportDeclaration(path) {
-                        lastImportIndex = Math.max(lastImportIndex, path.node.loc.end.line);
-                    },
-                    VariableDeclaration(path) {
-                        path.node.declarations.forEach(declaration => {
-                            if (declaration.init &&
-                                declaration.init.type === 'CallExpression' &&
-                                declaration.init.callee.name === 'useI18n') {
-                                if (declaration.id.type === 'ObjectPattern') {
-                                    const tProperty = declaration.id.properties.find(prop =>
-                                        prop.key.name === 't' && prop.value.name === '$t'
-                                    );
-                                    if (tProperty) {
-                                        hasDollarTDeclaration = true;
-                                    }
+            // 第三次遍历：检查是否有使用插件
+            traverse(ast, {
+                ImportDeclaration(path) {
+                    lastImportIndex = Math.max(lastImportIndex, path.node.loc.end.line);
+                },
+                VariableDeclaration(path) {
+                    path.node.declarations.forEach(declaration => {
+                        if (declaration.init &&
+                            declaration.init.type === 'CallExpression' &&
+                            declaration.init.callee.name === 'useI18n') {
+                            if (declaration.id.type === 'ObjectPattern') {
+                                const tProperty = declaration.id.properties.find(prop =>
+                                    prop.key.name === 't' && prop.value.name === '$t'
+                                );
+                                if (tProperty) {
+                                    hasDollarTDeclaration = true;
                                 }
                             }
-                        });
-                    }
-                });
+                        }
 
-                // 添加 $t 声明（如果需要）
-                if (!hasDollarTDeclaration) {
-                    const lines = code.split('\n');
-                    const insertIndex = lastImportIndex !== -1 ? lastImportIndex + 1 : 0;
-                    lines.splice(insertIndex, 0, `\nconst { t: $t } = useI18n();\n`);
-                    code = lines.join('\n');
-                }
+                        // 检查是否有 const $t = locale.t 的代码
+                        if (
+                            declaration.id.type === 'Identifier' &&
+                            declaration.id.name === '$t' &&
+                            declaration.init &&
+                            declaration.init.type === 'MemberExpression' &&
+                            declaration.init.object.name === 'locale' &&
+                            declaration.init.property.name === 't'
+                        ) {
+                            hasDollarTDeclaration = true;
+                        }
+
+                        
+                    });
+                },
+                
+            });
+
+            // 添加 $t 声明（如果需要）
+            if (!hasDollarTDeclaration) {
+                const lines = code.split('\n');
+                const insertIndex = lastImportIndex !== -1 ? lastImportIndex + 1 : 0;
+                const text = isJSFile? `\nconst $t = locale.t;\n`: `\nconst { t: $t } = useI18n();\n`
+                lines.splice(insertIndex, 0, text);
+                code = lines.join('\n');
             }
         }
 
@@ -223,8 +264,13 @@ function traverseTemplate(node, replacements) {
         for (const attr of node.startTag.attributes) {
             if (attr.value && /[\u4e00-\u9fa5]/.test(attr.value.value)) {
                 handleAttributeNode(attr, replacements);
+            }else if (attr.value && attr.value.type === 'VExpressionContainer' && t.isConditionalExpression(attr.value.expression)) {
+                handleConditionExpression(attr.value.expression, replacements);
+                
             }
         }
+    } else if (node.type === 'VExpressionContainer' && t.isConditionalExpression(node.expression)) {
+        handleConditionExpression(node.expression, replacements);
     }
 
     if (node.children) {
@@ -254,11 +300,39 @@ function handleAttributeNode(node, replacements) {
     }
 }
 
+function handleConditionExpression(node, replacements) {
+    // 检查字符串是否包含中文
+    const containsChinese = (str)=> {
+        return /[\u4e00-\u9fa5]+/.test(str);
+    }
+    // 处理三元运算符
+    if (containsChinese(node.consequent.value)) {
+        const trimmedText = node.consequent.value.trim();
+        if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
+            const escapedText = escapeForTranslation(trimmedText);
+            replacedTexts.add(escapedText);
+            const wrappedText = '`${' + `$t('_.${escapedText}')` + '}`';
+            replacements.push({ start: node.consequent.range[0], end: node.consequent.range[1], text: `${wrappedText}` });
+        }
+
+    }
+    if (containsChinese(node.alternate.value)) {
+        const trimmedText = node.alternate.value.trim();
+        if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
+            const escapedText = escapeForTranslation(trimmedText);
+            replacedTexts.add(escapedText);
+            const wrappedText = '`${' + `$t('_.${escapedText}')` + '}`';
+            replacements.push({ start: node.alternate.range[0], end: node.alternate.range[1], text: `${wrappedText}` });
+        }
+    }
+
+}
+
 function singleFileProcessor(filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
     const fileExt = path.extname(filePath);
 
-    if (fileExt === '.js' || fileExt === '.jsx') {
+    if (fileExt === '.js' || fileExt === '.jsx' || fileExt === '.ts' || fileExt === '.tsx') {
         const processedContent = processJavaScript(fileContent, true, false, true);
         return {
             inputFileContent: processedContent,
@@ -435,7 +509,7 @@ function generateTxtFile() {
 
 async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
     // console.log('dirPath', dirPath, excludedDirList);
-    const files = glob.sync(path.join(dirPath, '**/*.{vue,js,jsx}').replace(/\\/g, '/'), {
+    const files = glob.sync(path.join(dirPath, '**/*.{vue,js,jsx,tsx,ts}').replace(/\\/g, '/'), {
         ignore: excludedDirList,
     });
     console.log('Total files:', files.length);
