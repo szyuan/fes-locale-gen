@@ -435,7 +435,6 @@ function generateTxtFile() {
 }
 
 async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
-    // console.log('dirPath', dirPath, excludedDirList);
     const files = glob.sync(path.join(dirPath, '**/*.{vue,js,jsx}').replace(/\\/g, '/'), {
         ignore: excludedDirList,
     });
@@ -446,6 +445,17 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
 
     let processedCount = 0;
     const errorLog = [];
+
+    const currentTime = new Date().toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    }).replace(/[\s]/g, '-').replace(/[/]/g, '');
 
     for (let i = 0; i < files.length; i++) {
         const dfilePath = files[i];
@@ -460,8 +470,47 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
             console.log(`Progress: ${progress}% (${processedCount}/${files.length})`);
         } catch (error) {
             console.error(`Error processing file ${dfilePath}:`, error);
-            errorLog.push({ file: dfilePath, error: error.message });
+            errorLog.push({
+                file: dfilePath,
+                error: error.message,
+                stack: error.stack,
+                // 错误记录时间也使用中国时区
+                time: new Date().toLocaleString('zh-CN', { 
+                    timeZone: 'Asia/Shanghai',
+                    hour12: false 
+                })
+            });
         }
+    }
+
+    if (errorLog.length > 0) {
+        const outputDirectory = path.join(process.cwd(), 'locales-generated');
+        if (!fs.existsSync(outputDirectory)) {
+            fs.mkdirSync(outputDirectory, { recursive: true });
+        }
+
+        const errorLogPath = path.join(outputDirectory, `error-log-${currentTime}.json`);
+        fs.writeFileSync(
+            errorLogPath,
+            JSON.stringify(
+                {
+                    summary: {
+                        totalFiles: files.length,
+                        processedFiles: processedCount,
+                        errorCount: errorLog.length,
+                        // 摘要时间也使用中国时区
+                        timestamp: new Date().toLocaleString('zh-CN', { 
+                            timeZone: 'Asia/Shanghai',
+                            hour12: false 
+                        })
+                    },
+                    errors: errorLog
+                },
+                null,
+                2
+            )
+        );
+        console.log(`Errors occurred in ${errorLog.length} files, you can check the error log in ${errorLogPath}`);
     }
 
     if (extractTxt) {
@@ -471,9 +520,6 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
     }
 
     console.log(`Processing completed. ${processedCount} files processed.`);
-    if (errorLog.length > 0) {
-        console.log(`Errors occurred in ${errorLog.length} files.`);
-    }
 }
 
 async function translateLocaleFile() {
