@@ -13,6 +13,7 @@ const traverse = require('@babel/traverse').default;
 const generate = require('@babel/generator').default;
 const dotenv = require('dotenv');
 const { OpenAI } = require('openai');
+const readline = require('readline');
 
 // 解析命令行参数
 const args = minimist(process.argv.slice(2), {
@@ -595,7 +596,32 @@ function checkConfig() {
     }
 }
 
+// 添加确认函数
+async function confirmProcessAllFiles() {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+        rl.question('未指定目录(-d)，将处理当前目录下的所有文件，这可能需要较长时间并可能产生意外结果。是否继续？(y/N) ', (answer) => {
+            rl.close();
+            resolve(answer.toLowerCase() === 'y');
+        });
+    });
+}
+
+// 修改 main 函数
 async function main() {
+    // 如果没有指定目录且当前目录是默认值 './'
+    if (!args.d || args.d === './') {
+        const shouldContinue = await confirmProcessAllFiles();
+        if (!shouldContinue) {
+            console.log('操作已取消');
+            process.exit(0);
+        }
+    }
+    
     applyInDir(args.f, args.d, args.e, false);
 }
 
