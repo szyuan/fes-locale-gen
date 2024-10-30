@@ -41,12 +41,16 @@ function readTemplate(filePath) {
     let ast = null;
     try {
         ast = parse(inputFileContent, {
-            ecmaVersion: 2020,
-            sourceType: 'module',
-            ecmaFeatures: {
+            parser: '@typescript-eslint/parser', // 指定 TypeScript 解析器
+            parserOptions: {
+              ecmaVersion: 2020,
+              sourceType: 'module',
+              ecmaFeatures: {
                 jsx: true,
+                tsx: true, // 支持 TypeScript JSX
+              },
             },
-        });
+          });
         // console.log('parse completed');
     } catch (e) {
         console.error('ast解析出错: ', filePath, e);
