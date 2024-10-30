@@ -14,6 +14,7 @@ const generate = require('@babel/generator').default;
 const dotenv = require('dotenv');
 const { OpenAI } = require('openai');
 const t = require('@babel/types');
+const readline = require('readline');
 
 // 解析命令行参数
 const args = minimist(process.argv.slice(2), {
@@ -520,6 +521,17 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
     let processedCount = 0;
     const errorLog = [];
 
+    const currentTime = new Date().toLocaleString('zh-CN', { 
+        timeZone: 'Asia/Shanghai',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+    }).replace(/[\s]/g, '-').replace(/[/]/g, '');
+
     for (let i = 0; i < files.length; i++) {
         const dfilePath = files[i];
         console.log(`Processing file ${i + 1}/${files.length}: ${dfilePath}`);
@@ -533,8 +545,47 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
             console.log(`Progress: ${progress}% (${processedCount}/${files.length})`);
         } catch (error) {
             console.error(`Error processing file ${dfilePath}:`, error);
-            errorLog.push({ file: dfilePath, error: error.message });
+            errorLog.push({
+                file: dfilePath,
+                error: error.message,
+                stack: error.stack,
+                // 错误记录时间也使用中国时区
+                time: new Date().toLocaleString('zh-CN', { 
+                    timeZone: 'Asia/Shanghai',
+                    hour12: false 
+                })
+            });
         }
+    }
+
+    if (errorLog.length > 0) {
+        const outputDirectory = path.join(process.cwd(), 'locales-generated');
+        if (!fs.existsSync(outputDirectory)) {
+            fs.mkdirSync(outputDirectory, { recursive: true });
+        }
+
+        const errorLogPath = path.join(outputDirectory, `error-log-${currentTime}.json`);
+        fs.writeFileSync(
+            errorLogPath,
+            JSON.stringify(
+                {
+                    summary: {
+                        totalFiles: files.length,
+                        processedFiles: processedCount,
+                        errorCount: errorLog.length,
+                        // 摘要时间也使用中国时区
+                        timestamp: new Date().toLocaleString('zh-CN', { 
+                            timeZone: 'Asia/Shanghai',
+                            hour12: false 
+                        })
+                    },
+                    errors: errorLog
+                },
+                null,
+                2
+            )
+        );
+        console.log(`Errors occurred in ${errorLog.length} files, you can check the error log in ${errorLogPath}`);
     }
 
     if (extractTxt) {
@@ -544,9 +595,6 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
     }
 
     console.log(`Processing completed. ${processedCount} files processed.`);
-    if (errorLog.length > 0) {
-        console.log(`Errors occurred in ${errorLog.length} files.`);
-    }
 }
 
 async function translateLocaleFile() {
@@ -669,7 +717,32 @@ function checkConfig() {
     }
 }
 
+// 添加确认函数
+async function confirmProcessAllFiles() {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+    });
+
+    return new Promise((resolve) => {
+        rl.question('未指定目录(-d)，将处理当前目录下的所有文件，这可能需要较长时间并可能产生意外结果。是否继续？(y/N) ', (answer) => {
+            rl.close();
+            resolve(answer.toLowerCase() === 'y');
+        });
+    });
+}
+
+// 修改 main 函数
 async function main() {
+    // 如果没有指定目录且当前目录是默认值 './'
+    if (!args.d || args.d === './') {
+        const shouldContinue = await confirmProcessAllFiles();
+        if (!shouldContinue) {
+            console.log('操作已取消');
+            process.exit(0);
+        }
+    }
+    
     applyInDir(args.f, args.d, args.e, false);
 }
 
