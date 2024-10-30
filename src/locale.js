@@ -65,7 +65,7 @@ function readTemplate(filePath) {
 const replacedTexts = new Set();
 
 function escapeForTranslation(str) {
-    return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\0').replace(/\n/g, '\\0').replace(/\t/g, '\\t').replace(/\v/g, '\\v').replace(/\f/g, '\\f');
 }
 
 function processJavaScript(code, isModule = true, templateHasReplace = false, isJSFile = false) {
@@ -258,7 +258,8 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
         return code;
     } catch (error) {
         console.error('处理 JavaScript 时出错:', error);
-        return code;
+        throw new Error(error)
+        // return code;
     }
 }
 
