@@ -270,9 +270,6 @@ function traverseTemplate(node, replacements) {
         for (const attr of node.startTag.attributes) {
             if (attr.value && /[\u4e00-\u9fa5]/.test(attr.value.value)) {
                 handleAttributeNode(attr, replacements);
-            }else if (attr.value && attr.value.type === 'VExpressionContainer' && t.isConditionalExpression(attr.value.expression)) {
-                handleConditionExpression(attr.value.expression, replacements);
-                
             }
         }
     } else if (node.type === 'VExpressionContainer' && t.isConditionalExpression(node.expression)) {
