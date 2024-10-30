@@ -455,7 +455,7 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
         minute: '2-digit',
         second: '2-digit',
         hour12: false
-    }).replace(/[\s]/g, '-').replace(/[/]/g, '');
+    }).replace(/[\s/:]/g, '');
 
     for (let i = 0; i < files.length; i++) {
         const dfilePath = files[i];
@@ -489,7 +489,7 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
             fs.mkdirSync(outputDirectory, { recursive: true });
         }
 
-        const errorLogPath = path.join(outputDirectory, `error-log-${currentTime}.json`);
+        const errorLogPath = path.join(outputDirectory, `errorlog-${currentTime}.json`);
         fs.writeFileSync(
             errorLogPath,
             JSON.stringify(
