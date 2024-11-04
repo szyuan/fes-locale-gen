@@ -408,7 +408,8 @@ function processTemplateAst(ast, replacements) {
 
 function processDirective(prop, replacements) {
     if (prop.exp && prop.exp.content && !prop.exp.content.includes('$t(')) {
-        const chineseRegex = /['"]([^'"]*[\u4e00-\u9fa5]+[^'"]*)['"]/g;
+        // 修改正则表达式，限制匹配范围
+        const chineseRegex = /['"]([^'",\{\}\[\]]*[\u4e00-\u9fa5]+[^'",\{\}\[\]]*)['"]/g;
         let match;
         let processedContent = prop.exp.content;
         
@@ -425,9 +426,7 @@ function processDirective(prop, replacements) {
         }
 
         if (processedContent !== prop.exp.content) {
-            // 修改content(原文件)中对应内容
             replacements.push({start: prop.exp.loc.start.offset, end: prop.exp.loc.end.offset, text: processedContent})
-            
         }
     }
 }
