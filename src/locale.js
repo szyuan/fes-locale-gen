@@ -850,7 +850,7 @@ async function translateChunk(chunk, openai) {
     }`
     try {
         const response = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: "qwen-72b",
             messages: [{ role: "user", content: prompt }],
             // response_format: { type: "json_object" }
         });
