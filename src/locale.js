@@ -635,9 +635,34 @@ async function translateLocaleFile() {
     // 删除临时文件
     fs.unlinkSync(tempFilePath);
 
-    const chunks = chunkObject(zhJson, 200);
+    // 读取已存在的英文翻译
+    let existingTranslations = {};
+    if (fs.existsSync(enFilePath)) {
+        let enContent = fs.readFileSync(enFilePath, 'utf-8');
+        enContent = enContent.replace('export default', 'module.exports =');
+        const tempEnPath = path.join(localesDir, 'temp-en-US-common.js');
+        fs.writeFileSync(tempEnPath, enContent);
+        existingTranslations = require(tempEnPath);
+        fs.unlinkSync(tempEnPath);
+    }
 
-    let translatedContent = {};
+    // 过滤出需要翻译的新内容
+    const newTranslations = {};
+    Object.keys(zhJson).forEach(key => {
+        if (!existingTranslations[key]) {
+            newTranslations[key] = zhJson[key];
+        }
+    });
+
+    if (Object.keys(newTranslations).length === 0) {
+        console.log('No new translations needed.');
+        return;
+    }
+
+    console.log(`Translating ${Object.keys(newTranslations).length} new items...`);
+    const chunks = chunkObject(newTranslations, 200);
+
+    let translatedContent = { ...existingTranslations };
     for (let i = 0; i < chunks.length; i++) {
         console.log(`Translating chunk ${i + 1} of ${chunks.length}...`);
         const translatedChunk = await translateChunk(chunks[i], openai);
@@ -825,7 +850,7 @@ async function translateChunk(chunk, openai) {
     }`
     try {
         const response = await openai.chat.completions.create({
-            model: "qwen-72b",
+            model: "gpt-4o",
             messages: [{ role: "user", content: prompt }],
             // response_format: { type: "json_object" }
         });
