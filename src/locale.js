@@ -15,6 +15,7 @@ const dotenv = require('dotenv');
 const { OpenAI } = require('openai');
 const t = require('@babel/types');
 const readline = require('readline');
+const default_AI_PROMPT = 'Translate the following JSON object values from Chinese to English. Keep the keys unchanged'
 
 // 解析命令行参数
 const args = minimist(process.argv.slice(2), {
@@ -780,12 +781,25 @@ function handleConfig() {
         console.log('Current configuration:');
         console.log(`API_KEY: ${process.env.API_KEY || 'Not set'}`);
         console.log(`API_URL: ${process.env.API_URL || 'Not set'}`);
+        console.log(`AI_PROMPT: ${process.env.AI_PROMPT || 'Not set'}`);
     } else if (args._[1] === 'set') {
         // 设置新配置
         const config = {};
         if (args.key) config.API_KEY = args.key;
         if (args.url) config.API_URL = args.url;
 
+        const envContent = Object.entries(config)
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\n');
+
+        fs.writeFileSync('.env', envContent);
+        console.log('Configuration saved successfully.');
+    } else if (args._[1] === 'init') {
+        // 设置新配置
+        const config = {};
+        config.API_KEY = ''
+        config.API_URL = ''
+        config.AI_PROMPT = default_AI_PROMPT
         const envContent = Object.entries(config)
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
@@ -834,7 +848,7 @@ function removeJsonKeyword(inputString) {
 async function translateChunk(chunk, openai) {
     // const prompt = `Translate the following JSON object values from Chinese to English. Keep the keys unchanged:\n${JSON.stringify(chunk)}`;
     const prompt = `{
-        Request: "Translate the following JSON object values from Chinese to English. Keep the keys unchanged",
+        Request: ${process.env.AI_PROMPT ? process.env.AI_PROMPT: default_AI_PROMPT},
         Restriction: "Only return the JSON object without any additional replies",
         Format: {
             "key": "value",
