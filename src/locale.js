@@ -465,14 +465,24 @@ async function generateLocaleFile() {
     const replacedTextsObj = {};
     for (const text of replacedTexts) {
         if (!text.startsWith('_') && !existingTexts.hasOwnProperty(text)) {
-            replacedTextsObj[text] = text;
+            // 检查文本是否包含花括号
+            if (text.includes('{') || text.includes('}')) {
+                // 将花括号内的内容转换为模板字符串形式
+                const processedText = text.replace(/\{([^}]+)\}/g, '${$1}');
+                replacedTextsObj[text] = `{'${processedText}'}`;
+            } else {
+                replacedTextsObj[text] = text;
+            }
         }
     }
     const outputStream = fs.createWriteStream(outputFilePath);
     outputStream.write('/* eslint-disable prettier/prettier */\nexport default {\n');
     for (const text in replacedTextsObj) {
         if (!text.startsWith('_') ) {
-            outputStream.write(`  '${text}': '${replacedTextsObj[text]}',\n`);
+            // 如果值是以 {' 开头的，使用双引号包裹
+            const value = replacedTextsObj[text];
+            const quote = value.startsWith("{'") ? '"' : "'";
+            outputStream.write(`  '${text}': ${quote}${value}${quote},\n`);
         }
     }
     for (const text in existingTexts) {
@@ -668,7 +678,18 @@ async function translateLocaleFile() {
         console.log(`Translating chunk ${i + 1} of ${chunks.length}...`);
         const translatedChunk = await translateChunk(chunks[i], openai);
         if (translatedChunk) {
-            translatedContent = { ...translatedContent, ...JSON.parse(translatedChunk) };
+            const parsedChunk = JSON.parse(translatedChunk);
+            Object.entries(parsedChunk).forEach(([key, value]) => {
+                // 检查原始中文值是否使用了 {'xxx'} 格式
+                const originalValue = zhJson[key];
+                
+                if (typeof originalValue === 'string' && originalValue.startsWith("{'") && originalValue.endsWith("'}")) {
+                    // 如果原始值使用了 {'xxx'} 格式，翻译后的值也使用相同格式
+                    translatedContent[key] = `{'${value}'}`;
+                } else {
+                    translatedContent[key] = value;
+                }
+            });
         } else {
             console.error(`Failed to translate chunk ${i + 1}.`);
         }
@@ -846,7 +867,17 @@ function removeJsonKeyword(inputString) {
 }
 // 翻译函数
 async function translateChunk(chunk, openai) {
-    // const prompt = `Translate the following JSON object values from Chinese to English. Keep the keys unchanged:\n${JSON.stringify(chunk)}`;
+    // 预处理数据，移除特殊格式
+    const processedChunk = {};
+
+    Object.entries(chunk).forEach(([key, value]) => {
+        if (typeof value === 'string' && value.startsWith("{'") && value.endsWith("'}")) {
+            // 移除 {'...'} 格式，保留实际内容
+            processedChunk[key] = value.slice(2, -2);
+        } else {
+            processedChunk[key] = value;
+        }
+    });
     const prompt = `{
         Request: ${process.env.AI_PROMPT ? process.env.AI_PROMPT: default_AI_PROMPT},
         Restriction: "Only return the JSON object without any additional replies",
@@ -854,12 +885,12 @@ async function translateChunk(chunk, openai) {
             "key": "value",
             ...
         },
-        Original: ${JSON.stringify(chunk)},
+        Original: ${JSON.stringify(processedChunk)},
         Response: {
             // your response here
             "key": "value"
             ...
-            
+
         }
     }`
     try {
