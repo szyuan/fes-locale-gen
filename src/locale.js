@@ -808,7 +808,7 @@ function handleConfig() {
         const config = {};
         if (args.key) config.API_KEY = args.key;
         if (args.url) config.API_URL = args.url;
-
+        if (args.prompt) config.AI_PROMPT = args.prompt;
         const envContent = Object.entries(config)
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');

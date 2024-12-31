@@ -1,99 +1,165 @@
-# FES 国际化自动脚本工具
+# FES 国际化自动化工具
 
-## 功能
-1. 读取指定目录下的所有.vue、.js、.jsx文件，自动替换template与script中的语言标签为变量引用形式。以中文作为key，提高代码可读性。
-例：
-```
-<!-- 转换前： -->
-<h1 label="排序">组织架构管理</h1>
+一个用于自动处理前端国际化的命令行工具，可以自动识别和替换代码中的中文文本，生成语言包，并支持 AI 翻译。
 
-<!-- 转换后： -->
-<h1 :label="$t('_.排序')">{{ $t('_.组织架构管理') }}</h1>
-```
+## 功能特性
 
-2. 会在命令执行的目录下生成locales-generated/zh-CN-common.js
+1. 自动识别和替换中文文本
+- 支持 Vue/JS/JSX/TS/TSX 文件
+- 处理模板和脚本中的中文
+- 自动注入所需的依赖
+- 保持代码格式和注释
 
-3. 支持将生成的中文文件翻译成英文（en-US-common.js）
-## 用法
+2. 智能文本处理
+- 自动处理模板字符串
+- 处理 JSX 属性和文本
+- 支持条件表达式
+- 处理特殊字符和转义
 
-### 安装
+3. 语言包管理
+- 自动生成中文语言包
+- 支持 AI 翻译成英文
+- 增量更新翻译内容
+- 保留已有翻译
 
-```
+## 安装
+
+```bash
 npm i -g fes-locale-gen
 ```
 
+## 使用方法
+
 ### 基本使用
-```
-fes-locale-gen -d <目录> -e <排除文件>
+
+```bash
+# 处理指定目录
+fes-locale-gen -d <目录>
+
+# 排除特定文件或目录
+fes-locale-gen -d <目录> -e <排除路径>
+# 支持多个排除路径
+fes-locale-gen -d <目录> -e <排除路径1> -e <排除路径2>
+
+# 处理单个文件
+fes-locale-gen -f <文件路径>
 ```
 
-### 配置翻译API
-```
+### 配置翻译服务
+
+```bash
+# 初始化配置文件
+fes-locale-gen config init
+
+# 设置 API
 fes-locale-gen config set --key <your-api-key> --url <api-url>
-```
 
-### 查看当前配置
-```
+# 查看当前配置
 fes-locale-gen config list
 ```
 
-### 翻译生成的中文文件
-```
+配置项说明：
+- API_KEY: API密钥
+- API_URL: API地址
+- AI_PROMPT: AI翻译提示词，默认为"Translate the following JSON object values from Chinese to English. Keep the keys unchanged"
+
+### 翻译语言包
+
+```bash
+# 翻译生成的中文文件
 fes-locale-gen translate
 ```
 
-### 注意事项
-脚本将完成80%的重复性文本替换工作，剩余部分需要人工处理并同时做好替换后的核对。
+翻译特性：
+- 支持增量翻译，只翻译新增内容
+- 自动保留已有翻译
+- 分批处理大量文本
+- 自动处理特殊格式文本
 
-**注意以下是脚本执行后需要手动完成的部分:**
+## 生成的文件
 
-~~1. 需要为每个文件手动添加i18n插件的引入语句。~~
+工具会在项目根目录下生成以下文件：
 
-`/pages/**.vue`
 ```
-import { useI18n } from '@fesjs/fes';
-const { t: $t } = useI18n();
+locales-generated/
+  ├── zh-CN-common.js    # 中文语言包
+  ├── en-US-common.js    # 英文语言包（翻译后生成）
+  └── errorlog-*.json    # 错误日志（如果有错误）
 ```
 
-2. 配置好fes-i18n插件并引入准备好的翻译配置文件：
-
-`/locales/en-US.js`
+### 错误日志格式
+```json
+{
+  "summary": {
+    "totalFiles": 100,
+    "processedFiles": 98,
+    "errorCount": 2,
+    "timestamp": "2024-01-01 10:00:00"
+  },
+  "errors": [
+    {
+      "file": "src/pages/index.vue",
+      "error": "错误信息",
+      "stack": "错误堆栈",
+      "time": "2024-01-01 10:00:00"
+    }
+  ]
+}
 ```
-/**  
- * 1. 引入自动生成的翻译配置 
- * （将生成的翻译配置放在其他目录的原因，locales目录会影响导航栏中语言切换选项的展示）
- * */
-import enUSCommon from './locales-generated/en-US-common';
+
+## 使用示例
+
+### 代码转换
+
+```vue
+<!-- 转换前 -->
+<template>
+  <div class="user-info">
+    <h1>用户信息</h1>
+    <el-button @click="save">保存</el-button>
+  </div>
+</template>
+
+<!-- 转换后 -->
+<template>
+  <div class="user-info">
+    <h1>{{ $t('_.用户信息') }}</h1>
+    <el-button @click="save">{{ $t('_.保存') }}</el-button>
+  </div>
+</template>
+```
+
+### 语言包集成
+
+```javascript
+// locales/index.js
+import enUSCommon from '../locales-generated/en-US-common';
 
 export default {
-    /**  2. 使用下划线作为自动生成的命名空间 */
-    _: enUSCommon,
-
-    /**  3. 手动添加或主动覆盖的翻译配置 */
-    首页: 'Front Page',
-    产品管理: 'Product Management',
-    天: 'Day',
-    周: 'Week',
-    月: 'Month',
+    _: enUSCommon,  // 自动生成的翻译
+    // 其他手动添加的翻译...
 };
 ```
 
-3. 手动配置页面标题与菜单的翻译
+## 注意事项
 
-4. 脚本执行前做好git版本管理，脚本执行后做好生成结果检查
+1. 特殊场景处理
+- 包含点号的文本可能需要手动调整
+- 复杂的模板字符串可能需要优化
+- 某些动态内容可能需要重新组织
 
-## 暂未覆盖的场景
-- template中的表达式，如`<p>{{ row.compare === 1 ? '是' : '否' }}</p>`
-- 指令中的插值，例如
-```
-:label="`${variable}`"
-:rules="[
-    {
-        validator: (rule, value) => {
-            return true
-        },
-        trigger: ['blur', 'change'],
-        message: `${test}工作流名称需以字母开头，允许字母、数字、下划线，不超过 128 字符`
-    }
-]"
-```
+2. 建议事项
+- 执行前进行代码提交
+- 执行后检查生成的代码
+- 审查翻译结果的准确性
+
+3. 安全提示
+- 首次运行时会提示确认
+- 可以先处理单个文件测试
+- 建议先排除不需要处理的目录
+
+## 项目地址
+
+https://github.com/szyuan/fes-locale-gen
+
+欢迎提交 Issue 和 PR！
