@@ -16,14 +16,26 @@ const { OpenAI } = require('openai');
 const t = require('@babel/types');
 const readline = require('readline');
 const default_AI_PROMPT = 'Translate the following JSON object values from Chinese to English. Keep the keys unchanged'
+const PACKAGE_VERSION = require('../package.json').version;
+
+// 默认配置常量
+const DEFAULT_CONFIG = {
+    jsImport: "import { locale } from '@fesjs/fes'",
+    vueImport: "import { useI18n } from '@fesjs/fes'",
+    jsDeclaration: "const $t = locale.t",
+    vueDeclaration: "const { t: $t } = useI18n()",
+    jsFunction: "$t",
+    vueFunction: "$t"
+};
 
 // 解析命令行参数
 const args = minimist(process.argv.slice(2), {
-    string: ['key', 'url'],
+    string: ['key', 'url', 'prompt', 'js-import', 'vue-import', 'js-declaration', 'vue-declaration', 'js-function', 'vue-function'],
     alias: {
         f: 'file',
         d: 'directory',
         e: 'exclude',
+        v: 'version'
     },
     default: {
         f: null,
@@ -35,6 +47,19 @@ const args = minimist(process.argv.slice(2), {
 // 确保排除的目录总是一个数组
 if (!Array.isArray(args.e)) {
     args.e = [args.e];
+}
+
+// 获取配置函数
+function getConfig() {
+    dotenv.config();
+    return {
+        jsImport: process.env.JS_IMPORT || DEFAULT_CONFIG.jsImport,
+        vueImport: process.env.VUE_IMPORT || DEFAULT_CONFIG.vueImport,
+        jsDeclaration: process.env.JS_DECLARATION || DEFAULT_CONFIG.jsDeclaration,
+        vueDeclaration: process.env.VUE_DECLARATION || DEFAULT_CONFIG.vueDeclaration,
+        jsFunction: process.env.JS_FUNCTION || DEFAULT_CONFIG.jsFunction,
+        vueFunction: process.env.VUE_FUNCTION || DEFAULT_CONFIG.vueFunction
+    };
 }
 
 function readTemplate(filePath) {
@@ -69,7 +94,10 @@ function escapeForTranslation(str) {
     return str.replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\0').replace(/\n/g, '\\0').replace(/\t/g, '\\t').replace(/\v/g, '\\v').replace(/\f/g, '\\f');
 }
 
-function processJavaScript(code, isModule = true, templateHasReplace = false, isJSFile = false) {
+function processJavaScript(code, isModule = true, templateHasReplace = false, isJSFile = false, config = null) {
+    if (!config) {
+        config = getConfig();
+    }
     try {
         let ast = parseJS(code, {
             sourceType: isModule ? 'module' : 'script',
@@ -78,6 +106,9 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
 
         const replacements = [];
         let lastImportIndex = -1;
+        
+        // 使用配置中的函数名
+        const functionName = isJSFile ? config.jsFunction : config.vueFunction;
 
         // 第一次遍历：进行替换
         traverse(ast, {
@@ -86,7 +117,7 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                     path.node.callee.object.name === 'console') {
                     path.skip();
                 }
-                if (path.node.callee.name === '$t' || 
+                if (path.node.callee.name === functionName || 
                     (path.node.callee.type === 'MemberExpression' && 
                      path.node.callee.object.name === 'locale' && 
                      path.node.callee.property.name === 't')) {
@@ -95,9 +126,9 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
             },
             StringLiteral(path) {
                 if (path.parent.type !== 'JSXAttribute' && /[\u4e00-\u9fa5]/.test(path.node.value) &&
-                    !path.findParent(p => p.isCallExpression() && (p.node.callee.name === '$t' || (p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'locale' && p.node.callee.property.name === 't'))) &&
-                    !path.node.value.startsWith('_.$t(') &&
-                    !path.node.value.match(/^\$t\('_\.[^']+'\)$/) &&
+                    !path.findParent(p => p.isCallExpression() && (p.node.callee.name === functionName || (p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'locale' && p.node.callee.property.name === 't'))) &&
+                    !path.node.value.startsWith(`_.${functionName}(`) &&
+                    !path.node.value.match(new RegExp(`^${functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\('_\\.[^']+'\\)$`)) &&
                     !path.node.value.match(/^locale\.t\('_\.[^']+'\)$/) &&
                     !path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
                     const text = path.node.value;
@@ -106,7 +137,7 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                     replacements.push({
                         start: path.node.start,
                         end: path.node.end,
-                        text: `$t('_.${escapedText}')`
+                        text: `${functionName}('_.${escapedText}')`
                     });
                 }
             },
@@ -114,21 +145,21 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
             JSXAttribute(path) {
                 if (t.isJSXIdentifier(path.node.name) && t.isStringLiteral(path.node.value) && /[\u4e00-\u9fa5]/.test(path.node.value.value)) {
                     const trimmedText = path.node.value.value.trim();
-                    if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
+                    if (trimmedText && !trimmedText.startsWith(`${functionName}('_`)) {
                         const escapedText = escapeForTranslation(trimmedText);
                         replacedTexts.add(escapedText);
-                        const wrappedText = `${path.node.name.name}={$t('_.${escapedText}')}`;
+                        const wrappedText = `${path.node.name.name}={${functionName}('_.${escapedText}')}`;
                         replacements.push({ start: path.node.start, end: path.node.end, text: wrappedText });
                     }
                 }
             },
             // 处理标签内的中文字符
             JSXText(path) {
-                if (/[\u4e00-\u9fa5]/.test(path.node.value) && !path.node.value.startsWith('$t(\'_') ) {
+                if (/[\u4e00-\u9fa5]/.test(path.node.value) && !path.node.value.startsWith(`${functionName}('_`) ) {
                     const text = path.node.value.trim();
                     const escapedText = escapeForTranslation(text);
                     replacedTexts.add(escapedText);
-                    const wrappedText = '{`${' + `$t('_.${escapedText}')` + '}`}';
+                    const wrappedText = '{`${' + `${functionName}('_.${escapedText}')` + '}`}';
                     replacements.push({
                         start: path.node.start,
                         end: path.node.end,
@@ -140,9 +171,9 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                 if (!path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
                     path.node.quasis.forEach((quasi) => {
                         if (/[\u4e00-\u9fa5]/.test(quasi.value.raw) && 
-                            !quasi.value.raw.includes('$t(\'_') &&
+                            !quasi.value.raw.includes(`${functionName}('_`) &&
                             !quasi.value.raw.includes('locale.t(\'_') &&
-                            !quasi.value.raw.match(/\$t\('_\.[^']+'\)/) &&
+                            !quasi.value.raw.match(new RegExp(`${functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\('_\\.[^']+'\\)`)) &&
                             !quasi.value.raw.match(/locale\.t\('_\.[^']+'\)/)) {
                             const text = quasi.value.raw;
                             replacedTexts.add(text);
@@ -150,7 +181,7 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                             replacements.push({
                                 start: quasi.start,
                                 end: quasi.end,
-                                text: `\${$t('_.${escapedText}')}`
+                                text: `\${${functionName}('_.${escapedText}')}`
                             });
                         }
                     });
@@ -195,8 +226,8 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                     code = code.slice(0, importStart) + newImport + code.slice(importEnd);
                 } else {
                     code = isJSFile
-                        ? `import { locale } from '@fesjs/fes';\n` + code
-                        : `import { useI18n } from '@fesjs/fes';\n` + code;
+                        ? `${config.jsImport};\n` + code
+                        : `${config.vueImport};\n` + code;
                 }
             }
 
@@ -228,10 +259,10 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                             }
                         }
 
-                        // 检查是否有 const $t = locale.t 的代码
+                        // 检查是否有相应的函数声明
                         if (
                             declaration.id.type === 'Identifier' &&
-                            declaration.id.name === '$t' &&
+                            declaration.id.name === functionName &&
                             declaration.init &&
                             declaration.init.type === 'MemberExpression' &&
                             declaration.init.object.name === 'locale' &&
@@ -246,11 +277,11 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                 
             });
 
-            // 添加 $t 声明（如果需要）
+            // 添加函数声明（如果需要）
             if (!hasDollarTDeclaration) {
                 const lines = code.split('\n');
                 const insertIndex = lastImportIndex !== -1 ? lastImportIndex + 1 : 0;
-                const text = isJSFile? `\nconst $t = locale.t;\n`: `\nconst { t: $t } = useI18n();\n`
+                const text = isJSFile? `\n${config.jsDeclaration};\n`: `\n${config.vueDeclaration};\n`
                 lines.splice(insertIndex, 0, text);
                 code = lines.join('\n');
             }
@@ -264,47 +295,50 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
     }
 }
 
-function traverseTemplate(node, replacements) {
+function traverseTemplate(node, replacements, config) {
     if (node.type === 'VText' && /[\u4e00-\u9fa5]/.test(node.value)) {
-        handleTextNode(node, replacements);
+        handleTextNode(node, replacements, config);
     } else if (node.type === 'VElement' && node.startTag && node.startTag.attributes) {
         for (const attr of node.startTag.attributes) {
             if (attr.value && /[\u4e00-\u9fa5]/.test(attr.value.value)) {
-                handleAttributeNode(attr, replacements);
+                handleAttributeNode(attr, replacements, config);
             }
         }
     } else if (node.type === 'VExpressionContainer' && t.isConditionalExpression(node.expression)) {
-        handleConditionExpression(node.expression, replacements);
+        handleConditionExpression(node.expression, replacements, config);
     }
 
     if (node.children) {
         for (const child of node.children) {
-            traverseTemplate(child, replacements);
+            traverseTemplate(child, replacements, config);
         }
     }
 }
 
-function handleTextNode(node, replacements) {
+function handleTextNode(node, replacements, config) {
     const trimmedText = node.value.trim();
-    if (trimmedText && !trimmedText.startsWith('{{') && !trimmedText.includes('$t(\'_')) {
+    const functionName = config.vueFunction;
+    if (trimmedText && !trimmedText.startsWith('{{') && !trimmedText.includes(`${functionName}('_`)) {
         const escapedText = escapeForTranslation(trimmedText);
         replacedTexts.add(escapedText);
-        const wrappedText = `{{ $t('_.${escapedText}') }}`;
+        const wrappedText = `{{ ${functionName}('_.${escapedText}') }}`;
         replacements.push({ start: node.range[0], end: node.range[1], text: wrappedText });
     }
 }
 
-function handleAttributeNode(node, replacements) {
+function handleAttributeNode(node, replacements, config) {
     const trimmedText = node.value.value.trim();
-    if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
+    const functionName = config.vueFunction;
+    if (trimmedText && !trimmedText.startsWith(`${functionName}('_`)) {
         const escapedText = escapeForTranslation(trimmedText);
         replacedTexts.add(escapedText);
-        const wrappedText = `:${node.key.name}="$t('_.${escapedText}')"`;
+        const wrappedText = `:${node.key.name}="${functionName}('_.${escapedText}')"`;
         replacements.push({ start: node.range[0], end: node.range[1], text: wrappedText });
     }
 }
 
-function handleConditionExpression(node, replacements) {
+function handleConditionExpression(node, replacements, config) {
+    const functionName = config.vueFunction;
     // 检查字符串是否包含中文
     const containsChinese = (str)=> {
         return /[\u4e00-\u9fa5]+/.test(str);
@@ -312,20 +346,20 @@ function handleConditionExpression(node, replacements) {
     // 处理三元运算符
     if (containsChinese(node.consequent.value)) {
         const trimmedText = node.consequent.value.trim();
-        if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
+        if (trimmedText && !trimmedText.startsWith(`${functionName}('_`)) {
             const escapedText = escapeForTranslation(trimmedText);
             replacedTexts.add(escapedText);
-            const wrappedText = '`${' + `$t('_.${escapedText}')` + '}`';
+            const wrappedText = '`${' + `${functionName}('_.${escapedText}')` + '}`';
             replacements.push({ start: node.consequent.range[0], end: node.consequent.range[1], text: `${wrappedText}` });
         }
 
     }
     if (containsChinese(node.alternate.value)) {
         const trimmedText = node.alternate.value.trim();
-        if (trimmedText && !trimmedText.startsWith('$t(\'_')) {
+        if (trimmedText && !trimmedText.startsWith(`${functionName}('_`)) {
             const escapedText = escapeForTranslation(trimmedText);
             replacedTexts.add(escapedText);
-            const wrappedText = '`${' + `$t('_.${escapedText}')` + '}`';
+            const wrappedText = '`${' + `${functionName}('_.${escapedText}')` + '}`';
             replacements.push({ start: node.alternate.range[0], end: node.alternate.range[1], text: `${wrappedText}` });
         }
     }
@@ -335,9 +369,10 @@ function handleConditionExpression(node, replacements) {
 function singleFileProcessor(filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
     const fileExt = path.extname(filePath);
+    const config = getConfig();
 
     if (fileExt === '.js' || fileExt === '.jsx' || fileExt === '.ts' || fileExt === '.tsx') {
-        const processedContent = processJavaScript(fileContent, true, false, true);
+        const processedContent = processJavaScript(fileContent, true, false, true, config);
         return {
             inputFileContent: processedContent,
             modifyFile: () => fs.writeFileSync(filePath, processedContent),
@@ -350,7 +385,7 @@ function singleFileProcessor(filePath) {
         // 处理 template
         if (ast.templateBody) {
             const replacements = [];
-            traverseTemplate(ast.templateBody, replacements);
+            traverseTemplate(ast.templateBody, replacements, config);
             // 处理template中变量
             const vueParseResult = parseVue(processedContent, {
                 sourceType: 'module',
@@ -358,7 +393,7 @@ function singleFileProcessor(filePath) {
 
             if (vueParseResult.descriptor.template && vueParseResult.descriptor.template.ast) {
                 const templateAst = vueParseResult.descriptor.template.ast;
-                processTemplateAst(templateAst, replacements);
+                processTemplateAst(templateAst, replacements, config);
             }
             replacements.sort((a, b) => b.start - a.start);
             for (const { start, end, text } of replacements) {
@@ -372,7 +407,7 @@ function singleFileProcessor(filePath) {
         const scriptMatch = processedContent.match(/<script(\s+setup)?[^>]*>([\s\S]*?)<\/script>/i);
         if (scriptMatch) {
             const scriptContent = scriptMatch[2];
-            const processedScript = processJavaScript(scriptContent, true, templateHasReplace, false);
+            const processedScript = processJavaScript(scriptContent, true, templateHasReplace, false, config);
             if (processedScript !== scriptContent) {
                 processedContent = processedContent.replace(scriptMatch[0], `<script${scriptMatch[1] || ''}>
 ${processedScript}
@@ -388,24 +423,25 @@ ${processedScript}
     }
 }
 
-function processTemplateAst(ast, replacements) {
+function processTemplateAst(ast, replacements, config) {
     if (ast.props) {
         ast.props.forEach(prop => {
             if (prop.type === 7) { // 指令
-                processDirective(prop, replacements);
+                processDirective(prop, replacements, config);
             }
         });
     }
 
     if (ast.children) {
         ast.children.forEach(child => {
-            content = processTemplateAst(child, replacements);
+            processTemplateAst(child, replacements, config);
         });
     }
 }
 
-function processDirective(prop, replacements) {
-    if (prop.exp && prop.exp.content && !prop.exp.content.includes('$t(')) {
+function processDirective(prop, replacements, config) {
+    const functionName = config.vueFunction;
+    if (prop.exp && prop.exp.content && !prop.exp.content.includes(`${functionName}(`)) {
         // 修改正则表达式，限制匹配范围
         const chineseRegex = /['"]([^'",\{\}\[\]]*[\u4e00-\u9fa5]+[^'",\{\}\[\]]*)['"]/g;
         let match;
@@ -419,7 +455,7 @@ function processDirective(prop, replacements) {
             }
             processedContent = processedContent.replace(
                 `'${originalText}'`,
-                `$t('_.${escapedText}')`
+                `${functionName}('_.${escapedText}')`
             );
         }
 
@@ -803,13 +839,45 @@ function handleConfig() {
         console.log(`API_KEY: ${process.env.API_KEY || 'Not set'}`);
         console.log(`API_URL: ${process.env.API_URL || 'Not set'}`);
         console.log(`AI_PROMPT: ${process.env.AI_PROMPT || 'Not set'}`);
+        console.log(`JS_IMPORT: ${process.env.JS_IMPORT || DEFAULT_CONFIG.jsImport}`);
+        console.log(`VUE_IMPORT: ${process.env.VUE_IMPORT || DEFAULT_CONFIG.vueImport}`);
+        console.log(`JS_DECLARATION: ${process.env.JS_DECLARATION || DEFAULT_CONFIG.jsDeclaration}`);
+        console.log(`VUE_DECLARATION: ${process.env.VUE_DECLARATION || DEFAULT_CONFIG.vueDeclaration}`);
+        console.log(`JS_FUNCTION: ${process.env.JS_FUNCTION || DEFAULT_CONFIG.jsFunction}`);
+        console.log(`VUE_FUNCTION: ${process.env.VUE_FUNCTION || DEFAULT_CONFIG.vueFunction}`);
     } else if (args._[1] === 'set') {
         // 设置新配置
         const config = {};
         if (args.key) config.API_KEY = args.key;
         if (args.url) config.API_URL = args.url;
         if (args.prompt) config.AI_PROMPT = args.prompt;
-        const envContent = Object.entries(config)
+        if (args['js-import']) config.JS_IMPORT = args['js-import'];
+        if (args['vue-import']) config.VUE_IMPORT = args['vue-import'];
+        if (args['js-declaration']) config.JS_DECLARATION = args['js-declaration'];
+        if (args['vue-declaration']) config.VUE_DECLARATION = args['vue-declaration'];
+        if (args['js-function']) config.JS_FUNCTION = args['js-function'];
+        if (args['vue-function']) config.VUE_FUNCTION = args['vue-function'];
+        
+        // 读取现有配置
+        let existingConfig = {};
+        if (fs.existsSync('.env')) {
+            const envContent = fs.readFileSync('.env', 'utf-8');
+            envContent.split('\n').forEach(line => {
+                const eqIndex = line.indexOf('=');
+                if (eqIndex !== -1) {
+                    const key = line.substring(0, eqIndex);
+                    const value = line.substring(eqIndex + 1);
+                    if (key && value !== undefined) {
+                        existingConfig[key] = value;
+                    }
+                }
+            });
+        }
+        
+        // 合并配置
+        const finalConfig = { ...existingConfig, ...config };
+        
+        const envContent = Object.entries(finalConfig)
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
 
@@ -821,6 +889,12 @@ function handleConfig() {
         config.API_KEY = ''
         config.API_URL = ''
         config.AI_PROMPT = default_AI_PROMPT
+        config.JS_IMPORT = DEFAULT_CONFIG.jsImport
+        config.VUE_IMPORT = DEFAULT_CONFIG.vueImport
+        config.JS_DECLARATION = DEFAULT_CONFIG.jsDeclaration
+        config.VUE_DECLARATION = DEFAULT_CONFIG.vueDeclaration
+        config.JS_FUNCTION = DEFAULT_CONFIG.jsFunction
+        config.VUE_FUNCTION = DEFAULT_CONFIG.vueFunction
         const envContent = Object.entries(config)
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
@@ -838,8 +912,15 @@ async function handleTranslate() {
     await translateLocaleFile();
 }
 
+// 显示版本信息
+function showVersion() {
+    console.log(`fes-locale-gen v${PACKAGE_VERSION}`);
+}
+
 // 主逻辑
-if (args._[0] === 'config') {
+if (args.v || args.version) {
+    showVersion();
+} else if (args._[0] === 'config') {
     handleConfig();
 } else if (args._[0] === 'translate') {
     handleTranslate();
