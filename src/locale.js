@@ -25,12 +25,13 @@ const DEFAULT_CONFIG = {
     jsDeclaration: "const $t = locale.t",
     vueDeclaration: "const { t: $t } = useI18n()",
     jsFunction: "$t",
-    vueFunction: "$t"
+    vueFunction: "$t",
+    model: "qwen-72b"
 };
 
 // 解析命令行参数
 const args = minimist(process.argv.slice(2), {
-    string: ['key', 'url', 'prompt', 'js-import', 'vue-import', 'js-declaration', 'vue-declaration', 'js-function', 'vue-function'],
+    string: ['key', 'url', 'prompt', 'model', 'js-import', 'vue-import', 'js-declaration', 'vue-declaration', 'js-function', 'vue-function'],
     alias: {
         f: 'file',
         d: 'directory',
@@ -58,8 +59,78 @@ function getConfig() {
         jsDeclaration: process.env.JS_DECLARATION || DEFAULT_CONFIG.jsDeclaration,
         vueDeclaration: process.env.VUE_DECLARATION || DEFAULT_CONFIG.vueDeclaration,
         jsFunction: process.env.JS_FUNCTION || DEFAULT_CONFIG.jsFunction,
-        vueFunction: process.env.VUE_FUNCTION || DEFAULT_CONFIG.vueFunction
+        vueFunction: process.env.VUE_FUNCTION || DEFAULT_CONFIG.vueFunction,
+        model: process.env.MODEL || DEFAULT_CONFIG.model
     };
+}
+
+// 新增：解析配置项中的动态值
+function parseConfigValues(config) {
+    const result = {};
+    
+    try {
+        // 从 jsImport 中提取导入的对象名
+        const jsImportMatch = config.jsImport.match(/import\s*\{\s*([^}]+)\s*\}/);
+        if (jsImportMatch) {
+            const imports = jsImportMatch[1].split(',').map(s => s.trim());
+            result.jsImportObjects = imports;
+            // 提取主要的导入对象（通常是 locale）
+            const localeImport = imports.find(imp => imp.includes('locale')) || imports[0];
+            result.jsMainObject = localeImport.replace(/\s*as\s+.*/, '').trim();
+        } else {
+            // 回退到默认值
+            result.jsMainObject = 'locale';
+        }
+        
+        // 从 vueImport 中提取导入的函数名
+        const vueImportMatch = config.vueImport.match(/import\s*\{\s*([^}]+)\s*\}/);
+        if (vueImportMatch) {
+            const imports = vueImportMatch[1].split(',').map(s => s.trim());
+            result.vueImportObjects = imports;
+            // 提取主要的导入函数（通常是 useI18n）
+            const useI18nImport = imports.find(imp => imp.includes('useI18n')) || imports[0];
+            result.vueMainFunction = useI18nImport.replace(/\s*as\s+.*/, '').trim();
+        } else {
+            // 回退到默认值
+            result.vueMainFunction = 'useI18n';
+        }
+        
+        // 从 jsDeclaration 中提取对象名和方法名
+        const jsDeclarationMatch = config.jsDeclaration.match(/(\w+)\s*=\s*(\w+)\.(\w+)/);
+        if (jsDeclarationMatch) {
+            result.jsObjectName = jsDeclarationMatch[2]; // 如 locale
+            result.jsMethodName = jsDeclarationMatch[3]; // 如 t
+        } else {
+            // 回退到默认值
+            result.jsObjectName = 'locale';
+            result.jsMethodName = 't';
+        }
+        
+        // 从 vueDeclaration 中提取解构的变量名
+        const vueDeclarationMatch = config.vueDeclaration.match(/\{\s*(\w+):\s*(\w+)\s*\}\s*=\s*(\w+)\(/);
+        if (vueDeclarationMatch) {
+            result.vueOriginalProp = vueDeclarationMatch[1]; // 如 t
+            result.vueAliasName = vueDeclarationMatch[2]; // 如 $t
+            result.vueHookName = vueDeclarationMatch[3]; // 如 useI18n
+        } else {
+            // 回退到默认值
+            result.vueOriginalProp = 't';
+            result.vueAliasName = '$t';
+            result.vueHookName = 'useI18n';
+        }
+    } catch (error) {
+        console.warn('配置解析失败，使用默认值:', error.message);
+        // 设置所有默认值
+        result.jsMainObject = 'locale';
+        result.jsObjectName = 'locale';
+        result.jsMethodName = 't';
+        result.vueMainFunction = 'useI18n';
+        result.vueOriginalProp = 't';
+        result.vueAliasName = '$t';
+        result.vueHookName = 'useI18n';
+    }
+    
+    return result;
 }
 
 function readTemplate(filePath) {
@@ -98,6 +169,10 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
     if (!config) {
         config = getConfig();
     }
+    
+    // 解析配置中的动态值
+    const configValues = parseConfigValues(config);
+    
     try {
         let ast = parseJS(code, {
             sourceType: isModule ? 'module' : 'script',
@@ -109,6 +184,10 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
         
         // 使用配置中的函数名
         const functionName = isJSFile ? config.jsFunction : config.vueFunction;
+        
+        // 从配置中获取对象名和方法名
+        const objectName = isJSFile ? configValues.jsObjectName : configValues.vueMainFunction;
+        const methodName = isJSFile ? configValues.jsMethodName : configValues.vueOriginalProp;
 
         // 第一次遍历：进行替换
         traverse(ast, {
@@ -119,17 +198,20 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                 }
                 if (path.node.callee.name === functionName || 
                     (path.node.callee.type === 'MemberExpression' && 
-                     path.node.callee.object.name === 'locale' && 
-                     path.node.callee.property.name === 't')) {
+                     path.node.callee.object.name === objectName && 
+                     path.node.callee.property.name === methodName)) {
                     path.skip();
                 }
             },
             StringLiteral(path) {
+                // 创建动态的正则表达式匹配模式
+                const objectMethodPattern = new RegExp(`^${objectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.${methodName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\('_\\.[^']+'\\)$`);
+                
                 if (path.parent.type !== 'JSXAttribute' && /[\u4e00-\u9fa5]/.test(path.node.value) &&
-                    !path.findParent(p => p.isCallExpression() && (p.node.callee.name === functionName || (p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'locale' && p.node.callee.property.name === 't'))) &&
+                    !path.findParent(p => p.isCallExpression() && (p.node.callee.name === functionName || (p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === objectName && p.node.callee.property.name === methodName))) &&
                     !path.node.value.startsWith(`_.${functionName}(`) &&
                     !path.node.value.match(new RegExp(`^${functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\('_\\.[^']+'\\)$`)) &&
-                    !path.node.value.match(/^locale\.t\('_\.[^']+'\)$/) &&
+                    !path.node.value.match(objectMethodPattern) &&
                     !path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
                     const text = path.node.value;
                     const escapedText = escapeForTranslation(text);
@@ -169,12 +251,16 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
             },
             TemplateLiteral(path) {
                 if (!path.findParent((p) => p.isCallExpression() && p.node.callee.type === 'MemberExpression' && p.node.callee.object.name === 'console')) {
+                    // 创建动态的匹配模式
+                    const objectMethodIncludePattern = `${objectName}.${methodName}('_`;
+                    const objectMethodRegexPattern = new RegExp(`${objectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.${methodName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\('_\\.[^']+'\\)`);
+                    
                     path.node.quasis.forEach((quasi) => {
                         if (/[\u4e00-\u9fa5]/.test(quasi.value.raw) && 
                             !quasi.value.raw.includes(`${functionName}('_`) &&
-                            !quasi.value.raw.includes('locale.t(\'_') &&
+                            !quasi.value.raw.includes(objectMethodIncludePattern) &&
                             !quasi.value.raw.match(new RegExp(`${functionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\('_\\.[^']+'\\)`)) &&
-                            !quasi.value.raw.match(/locale\.t\('_\.[^']+'\)/)) {
+                            !quasi.value.raw.match(objectMethodRegexPattern)) {
                             const text = quasi.value.raw;
                             replacedTexts.add(text);
                             const escapedText = escapeForTranslation(text);
@@ -204,25 +290,30 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
 
             let hasLocaleImport = false;
             let existingFesImport = null;
-
-            // 第二次遍历：检查是否引入 locale 或 useI18n
+            // 解析导入语句判断使用的什么国际化库, 解析from后的内容就行
+            const i18nImport = config.vueImport.match(/from\s+['"]([^'"]+)['"]/);
+            // 解析国际化函数是什么
+            // 第二次遍历：检查是否引入相应的对象或函数
             traverse(ast, {
                 ImportDeclaration(path) {
-                    if (path.node.source.value === '@fesjs/fes') {
+                    if (path.node.source.value === i18nImport[1]) {
                         existingFesImport = path.node;
+                        // 检查是否已经导入了需要的对象或函数
+                        const requiredImportName = isJSFile ? configValues.jsMainObject : configValues.vueMainFunction;
                         hasLocaleImport = path.node.specifiers.some(spec =>
                             spec.type === 'ImportSpecifier' &&
-                            (spec.imported.name === 'locale' || spec.imported.name === 'useI18n'));
+                            spec.imported.name === requiredImportName);
                     }
                 }
             });
 
-            // 添加 locale 或 useI18n 导入（如果需要）
+            // 添加所需的导入（如果需要）
             if (!hasLocaleImport) {
                 if (existingFesImport) {
                     const importStart = existingFesImport.start;
                     const importEnd = existingFesImport.end;
-                    const newImport = generate(existingFesImport).code.replace(/}(?=[^}]*$)/, isJSFile ? ', locale }' : ', useI18n }');
+                    const requiredImportName = isJSFile ? configValues.jsMainObject : configValues.vueMainFunction;
+                    const newImport = generate(existingFesImport).code.replace(/}(?=[^}]*$)/, `, ${requiredImportName} }`);
                     code = code.slice(0, importStart) + newImport + code.slice(importEnd);
                 } else {
                     code = isJSFile
@@ -239,19 +330,21 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
 
             let hasDollarTDeclaration = false;
 
-            // 第三次遍历：检查是否有使用插件
+            // 第三次遍历：检查是否有函数声明
             traverse(ast, {
                 ImportDeclaration(path) {
                     lastImportIndex = Math.max(lastImportIndex, path.node.loc.end.line);
                 },
                 VariableDeclaration(path) {
                     path.node.declarations.forEach(declaration => {
+                        // 检查Vue组合式API的声明模式
                         if (declaration.init &&
                             declaration.init.type === 'CallExpression' &&
-                            declaration.init.callee.name === 'useI18n') {
+                            declaration.init.callee.name === configValues.vueHookName) {
                             if (declaration.id.type === 'ObjectPattern') {
                                 const tProperty = declaration.id.properties.find(prop =>
-                                    prop.key.name === 't' && prop.value.name === '$t'
+                                    prop.key.name === configValues.vueOriginalProp && 
+                                    prop.value.name === configValues.vueAliasName
                                 );
                                 if (tProperty) {
                                     hasDollarTDeclaration = true;
@@ -259,14 +352,14 @@ function processJavaScript(code, isModule = true, templateHasReplace = false, is
                             }
                         }
 
-                        // 检查是否有相应的函数声明
+                        // 检查JS方式的函数声明
                         if (
                             declaration.id.type === 'Identifier' &&
                             declaration.id.name === functionName &&
                             declaration.init &&
                             declaration.init.type === 'MemberExpression' &&
-                            declaration.init.object.name === 'locale' &&
-                            declaration.init.property.name === 't'
+                            declaration.init.object.name === configValues.jsObjectName &&
+                            declaration.init.property.name === configValues.jsMethodName
                         ) {
                             hasDollarTDeclaration = true;
                         }
@@ -370,6 +463,7 @@ function singleFileProcessor(filePath) {
     const fileContent = fs.readFileSync(filePath, 'utf-8');
     const fileExt = path.extname(filePath);
     const config = getConfig();
+    const configValues = parseConfigValues(config);
 
     if (fileExt === '.js' || fileExt === '.jsx' || fileExt === '.ts' || fileExt === '.tsx') {
         const processedContent = processJavaScript(fileContent, true, false, true, config);
@@ -404,12 +498,13 @@ function singleFileProcessor(filePath) {
             }
         }
         // 处理 script 和 script setup
-        const scriptMatch = processedContent.match(/<script(\s+setup)?[^>]*>([\s\S]*?)<\/script>/i);
+        const scriptMatch = processedContent.match(/<script([^>]*)>([\s\S]*?)<\/script>/i);
         if (scriptMatch) {
+            const scriptAttributes = scriptMatch[1]; // 捕获所有属性
             const scriptContent = scriptMatch[2];
             const processedScript = processJavaScript(scriptContent, true, templateHasReplace, false, config);
             if (processedScript !== scriptContent) {
-                processedContent = processedContent.replace(scriptMatch[0], `<script${scriptMatch[1] || ''}>
+                processedContent = processedContent.replace(scriptMatch[0], `<script${scriptAttributes}>
 ${processedScript}
 </script>`);
             }
@@ -647,8 +742,10 @@ async function applyInDir(filePath, dirPath, excludedDirList, extractTxt) {
 
 async function translateLocaleFile() {
     dotenv.config();
+    const config = getConfig();
     const apiKey = process.env.API_KEY;
     const apiUrl = process.env.API_URL;
+    const model = config.model;
     const localesDir = path.join(process.cwd(), '/locales-generated')
     if (!apiKey || !apiUrl) {
         console.error('API key or URL not set. Please run "fes-locale-gen config set --key <your-key> --url <your-url>" first.');
@@ -712,7 +809,7 @@ async function translateLocaleFile() {
     let translatedContent = { ...existingTranslations };
     for (let i = 0; i < chunks.length; i++) {
         console.log(`Translating chunk ${i + 1} of ${chunks.length}...`);
-        const translatedChunk = await translateChunk(chunks[i], openai);
+        const translatedChunk = await translateChunk(chunks[i], openai, model);
         if (translatedChunk) {
             const parsedChunk = JSON.parse(translatedChunk);
             Object.entries(parsedChunk).forEach(([key, value]) => {
@@ -749,7 +846,7 @@ async function translateLocaleFile() {
                 missingChunk[key] = zhJson[key];
             });
 
-            const translatedMissingChunk = await translateChunk(missingChunk, openai);
+            const translatedMissingChunk = await translateChunk(missingChunk, openai, model);
             if (translatedMissingChunk) {
                 const parsedMissingChunk = JSON.parse(translatedMissingChunk);
                 translatedContent = { ...translatedContent, ...parsedMissingChunk };
@@ -845,6 +942,7 @@ function handleConfig() {
         console.log(`VUE_DECLARATION: ${process.env.VUE_DECLARATION || DEFAULT_CONFIG.vueDeclaration}`);
         console.log(`JS_FUNCTION: ${process.env.JS_FUNCTION || DEFAULT_CONFIG.jsFunction}`);
         console.log(`VUE_FUNCTION: ${process.env.VUE_FUNCTION || DEFAULT_CONFIG.vueFunction}`);
+        console.log(`MODEL: ${process.env.MODEL || DEFAULT_CONFIG.model}`);
     } else if (args._[1] === 'set') {
         // 设置新配置
         const config = {};
@@ -857,6 +955,7 @@ function handleConfig() {
         if (args['vue-declaration']) config.VUE_DECLARATION = args['vue-declaration'];
         if (args['js-function']) config.JS_FUNCTION = args['js-function'];
         if (args['vue-function']) config.VUE_FUNCTION = args['vue-function'];
+        if (args.model) config.MODEL = args.model;
         
         // 读取现有配置
         let existingConfig = {};
@@ -895,6 +994,7 @@ function handleConfig() {
         config.VUE_DECLARATION = DEFAULT_CONFIG.vueDeclaration
         config.JS_FUNCTION = DEFAULT_CONFIG.jsFunction
         config.VUE_FUNCTION = DEFAULT_CONFIG.vueFunction
+        config.MODEL = DEFAULT_CONFIG.model
         const envContent = Object.entries(config)
             .map(([key, value]) => `${key}=${value}`)
             .join('\n');
@@ -947,7 +1047,7 @@ function removeJsonKeyword(inputString) {
     return inputString;
 }
 // 翻译函数
-async function translateChunk(chunk, openai) {
+async function translateChunk(chunk, openai, model = 'qwen-72b') {
     // 预处理数据，移除特殊格式
     const processedChunk = {};
 
@@ -976,7 +1076,7 @@ async function translateChunk(chunk, openai) {
     }`
     try {
         const response = await openai.chat.completions.create({
-            model: "qwen-72b",
+            model: model,
             messages: [{ role: "user", content: prompt }],
             // response_format: { type: "json_object" }
         });
